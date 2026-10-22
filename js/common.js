@@ -30,6 +30,9 @@ window.fmtAgo = (ms) => {
   return fmtDate(ms);
 };
 
+window.fmtSize = (n = 0) =>
+  n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(2)}GB` : n >= 1024 ** 2 ? `${(n / 1024 ** 2).toFixed(1)}MB` : `${Math.max(1, Math.round(n / 1024))}KB`;
+
 // 테마 전환 버튼
 window.initTheme = (btn) => {
   const sync = () => ($(".theme-label", btn).textContent = document.documentElement.dataset.theme === "dark" ? "White" : "Dark");

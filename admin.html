@@ -46,6 +46,8 @@
         <button type="button" role="tab" class="is-active" data-panel="users">회원 승인 <span class="count" id="pending-count" hidden></span></button>
         <button type="button" role="tab" data-panel="codes">승인코드</button>
         <button type="button" role="tab" data-panel="channels">유튜브 채널</button>
+        <button type="button" role="tab" data-panel="sigs">시그 · 레슨 영상</button>
+        <button type="button" role="tab" data-panel="files">파일</button>
         <button type="button" role="tab" data-panel="crews">크루 관리</button>
         <button type="button" role="tab" data-panel="requests">요청함 <span class="count" id="unread-count" hidden></span></button>
         <button type="button" role="tab" data-panel="account">내 계정</button>
@@ -106,6 +108,74 @@
         <div class="channel-list" id="channel-list"></div>
       </section>
 
+      <!-- 시그 · 레슨 영상 -->
+      <section class="panel" data-view="sigs" hidden>
+        <div class="panel-head">
+          <h2>시그 · 레슨 영상</h2>
+          <label class="field inline-field">크루<select class="crew-pick" id="sig-crew"></select></label>
+        </div>
+
+        <div class="box">
+          <h3>엑셀로 한 번에 올리기</h3>
+          <p class="hint">양식 칸: <b>제외 · 분류 · 시그 이름 · 시그단가 · 유튜브 레퍼런스 · 레슨 영상</b> — 구글 시트에서 <b>파일 → 다운로드 → Microsoft Excel(.xlsx)</b>로 받은 파일을 그대로 올리면 됩니다.<br>
+            이름이 같은 시그는 내용이 바뀌고, 새 이름은 추가됩니다. 제외 칸에 x 가 있으면 사이트에서 숨겨집니다.
+            레슨 영상 칸의 유튜브·드라이브 링크는 바로 등록되고, <b>파일 이름(○○.mp4)은 "파일 대기"</b>로 만들어지니 아래 목록에서 영상 파일을 올려 주세요.</p>
+          <form class="inline-form" id="excel-form">
+            <button type="button" class="ghost-btn" id="excel-template">양식 다운로드</button>
+            <label class="field grow">엑셀 파일 (.xlsx, .csv)<input type="file" name="file" accept=".xlsx,.xls,.csv" required></label>
+            <label class="check"><input type="checkbox" name="prune"> 엑셀에 없는 시그는 삭제</label>
+            <button class="primary-btn" type="submit">업로드</button>
+          </form>
+          <p class="form-note" id="excel-note" aria-live="polite"></p>
+        </div>
+
+        <div class="box">
+          <h3>시그 하나 추가</h3>
+          <form class="inline-form" id="sig-form">
+            <label class="field">분류<input name="category" list="sig-categories" maxlength="30" placeholder="엑셀시그"></label>
+            <label class="field">시그 이름<input name="name" required maxlength="100"></label>
+            <label class="field">시그단가<input name="price" inputmode="numeric" placeholder="10000"></label>
+            <label class="field grow">유튜브 레퍼런스<input name="ref_url" type="url" placeholder="https://youtube.com/shorts/…"></label>
+            <button class="primary-btn" type="submit">추가</button>
+          </form>
+          <datalist id="sig-categories"><option>엑셀시그</option><option>첼린지</option><option>아이돌 시그</option><option>아웃송</option></datalist>
+        </div>
+
+        <div class="panel-head list-head">
+          <h3>시그 목록 <span class="muted" id="sig-count"></span></h3>
+          <div class="chips">
+            <button type="button" class="chip is-active" data-sig-filter="all">전체</button>
+            <button type="button" class="chip" data-sig-filter="pending">파일 대기</button>
+            <button type="button" class="chip" data-sig-filter="hidden">숨김</button>
+          </div>
+          <label class="search"><span class="sr-only">시그 검색</span><input type="search" id="sig-search-admin" placeholder="시그 이름 검색"></label>
+        </div>
+        <p class="form-note" id="sig-note" aria-live="polite"></p>
+        <div class="sig-admin-list" id="sig-admin-list"></div>
+      </section>
+
+      <!-- 파일 -->
+      <section class="panel" data-view="files" hidden>
+        <div class="panel-head">
+          <h2>파일 다운로드</h2>
+          <label class="field inline-field">크루<select class="crew-pick" id="file-crew"></select></label>
+        </div>
+        <p class="hint">사이트의 <b>파일 다운로드</b> 메뉴에 올라갑니다. 승인된 회원만 받을 수 있습니다.</p>
+        <form class="inline-form" id="file-form">
+          <label class="field">제목<input name="title" maxlength="100" placeholder="비우면 파일 이름"></label>
+          <label class="field grow">파일 (2GB 이하)<input type="file" name="file" required></label>
+          <button class="primary-btn" type="submit">올리기</button>
+        </form>
+        <div class="progress" id="file-progress" hidden><span></span></div>
+        <p class="form-note" id="file-note" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table class="sig-table admin-table">
+            <thead><tr><th>제목</th><th>파일</th><th class="num">크기</th><th>올린 날</th><th class="right">관리</th></tr></thead>
+            <tbody id="file-list"></tbody>
+          </table>
+        </div>
+      </section>
+
       <!-- 크루 관리 -->
       <section class="panel" data-view="crews" hidden>
         <div class="panel-head"><h2>크루 관리</h2></div>
@@ -157,6 +227,7 @@
     </div>
   </dialog>
 
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
   <script src="js/common.js"></script>
   <script src="js/admin.js"></script>
 </body>

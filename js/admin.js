@@ -156,6 +156,11 @@
   async function loadCrews() {
     crews = await api("api/admin/crews");
     $$(".crew-select").forEach((s) => (s.innerHTML = crewOptions(s.value)));
+    $$(".crew-pick").forEach((s) => {
+      const prev = s.value;
+      s.innerHTML = crews.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+      if (crews.some((c) => c.id === prev)) s.value = prev;
+    });
     $("#crew-list").innerHTML = crews.length
       ? crews.map((c, i) => `
         <tr data-crew-row="${esc(c.id)}">
@@ -171,6 +176,7 @@
           </td>
         </tr>`).join("")
       : `<tr><td colspan="4"><div class="empty">크루가 없습니다.</div></td></tr>`;
+    await Promise.all([loadSigs(), loadFiles()]);
   }
 
   $("#crew-form").addEventListener("submit", async (e) => {
@@ -202,6 +208,300 @@
       $("#crew-note").textContent = "저장했습니다.";
       await Promise.all([loadCrews(), loadChannels()]);
     });
+  });
+
+  /* ---------- 파일 올리기 (진행률 표시) ---------- */
+  function upload(url, file, bar) {
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      const done = () => { if (bar) bar.hidden = true; };
+      xhr.open("POST", url);
+      xhr.setRequestHeader("Content-Type", "application/octet-stream");
+      xhr.setRequestHeader("X-Upload", "1");
+      xhr.setRequestHeader("X-Filename", encodeURIComponent(file.name));
+      xhr.upload.onprogress = (e) => {
+        if (!bar || !e.lengthComputable) return;
+        bar.hidden = false;
+        bar.firstElementChild.style.width = `${(e.loaded / e.total) * 100}%`;
+      };
+      xhr.onload = () => {
+        done();
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch {}
+        xhr.status < 300 ? resolve(data) : reject(new Error(data.error || "업로드에 실패했습니다."));
+      };
+      xhr.onerror = () => { done(); reject(new Error("업로드 중 연결이 끊겼습니다.")); };
+      xhr.send(file);
+    });
+  }
+
+  /* ---------- 시그 · 레슨 영상 ---------- */
+  const KIND = { youtube: "유튜브", drive: "드라이브", link: "링크", file: "파일", pending: "파일 대기" };
+  let sigs = [];
+  let sigFilter = "all";
+  const openSigs = new Set();
+  const sigCrew = () => $("#sig-crew").value;
+
+  async function loadSigs() {
+    if (!sigCrew()) { sigs = []; return renderSigs(); }
+    sigs = await api(`api/admin/sigs?crew=${encodeURIComponent(sigCrew())}`);
+    renderSigs();
+  }
+
+  function lessonHtml(l) {
+    const label = l.title || l.url;
+    const body = l.kind === "pending"
+      ? `<span class="lesson-title">${esc(label)}</span>
+         <label class="mini-action ok file-btn">영상 파일 올리기<input type="file" accept="video/*" data-fill="${l.id}" hidden></label>`
+      : l.kind === "file"
+        ? `<span class="lesson-title">${esc(label)}</span><span class="muted">${fmtSize(l.size)}</span>`
+        : `<a class="lesson-title" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(label)}</a>`;
+    return `<li class="lesson ${l.kind}"><span class="kind">${KIND[l.kind] || l.kind}</span>${body}
+      <button type="button" class="mini-action danger" data-lesson-del="${l.id}">삭제</button></li>`;
+  }
+
+  function renderSigs() {
+    const q = $("#sig-search-admin").value.trim().toLowerCase();
+    const list = sigs.filter((s) =>
+      (!q || s.name.toLowerCase().includes(q)) &&
+      (sigFilter === "all" || (sigFilter === "hidden" ? s.hidden : s.items.some((l) => l.kind === "pending"))));
+    const pending = sigs.reduce((n, s) => n + s.items.filter((l) => l.kind === "pending").length, 0);
+    $("#sig-count").textContent = `${sigs.length}개${pending ? ` · 파일 대기 ${pending}개` : ""}`;
+    $("#sig-admin-list").innerHTML = list.length
+      ? list.map((s) => {
+        const ready = s.items.filter((l) => l.kind !== "pending").length;
+        const wait = s.items.length - ready;
+        const open = openSigs.has(s.id);
+        return `
+        <article class="sig-admin ${s.hidden ? "is-hidden" : ""}" data-sig="${s.id}">
+          <div class="sig-row">
+            <input class="cell-input" name="category" value="${esc(s.category)}" list="sig-categories" maxlength="30" aria-label="분류">
+            <input class="cell-input" name="name" value="${esc(s.name)}" maxlength="100" aria-label="시그 이름">
+            <input class="cell-input" name="price" value="${s.price.toLocaleString()}" inputmode="numeric" aria-label="시그단가">
+            <input class="cell-input" name="ref_url" value="${esc(s.ref_url)}" placeholder="유튜브 레퍼런스" aria-label="유튜브 레퍼런스">
+            <label class="check"><input type="checkbox" name="hidden" ${s.hidden ? "checked" : ""}> 숨김</label>
+            <div class="actions">
+              <button type="button" class="mini-action ${wait ? "warn" : ""}" data-lessons aria-expanded="${open}">레슨 ${ready}${wait ? ` · 대기 ${wait}` : ""}</button>
+              <button type="button" class="mini-action ok" data-save>저장</button>
+              <button type="button" class="mini-action danger" data-delete>삭제</button>
+            </div>
+          </div>
+          <div class="lesson-box" ${open ? "" : "hidden"}>
+            ${s.items.length ? `<ul class="lesson-list">${s.items.map(lessonHtml).join("")}</ul>` : '<p class="hint">등록된 레슨 영상이 없습니다.</p>'}
+            <div class="lesson-add">
+              <input class="cell-input" name="lesson_url" placeholder="유튜브 · 구글 드라이브 링크">
+              <button type="button" class="mini-action ok" data-add-link>링크 추가</button>
+              <span class="muted">또는</span>
+              <label class="mini-action file-btn">영상 파일 올리기<input type="file" accept="video/*" data-upload-new hidden></label>
+            </div>
+            <div class="progress" hidden><span></span></div>
+          </div>
+        </article>`;
+      }).join("")
+      : `<div class="empty">${sigs.length ? "조건에 맞는 시그가 없습니다." : "등록된 시그가 없습니다. 엑셀을 올리거나 위에서 하나씩 추가하세요."}</div>`;
+  }
+
+  $("#sig-crew").addEventListener("change", () => { openSigs.clear(); loadSigs(); });
+  $("#sig-search-admin").addEventListener("input", renderSigs);
+  $$("[data-sig-filter]").forEach((b) => b.addEventListener("click", () => {
+    sigFilter = b.dataset.sigFilter;
+    $$("[data-sig-filter]").forEach((x) => x.classList.toggle("is-active", x === b));
+    renderSigs();
+  }));
+
+  $("#sig-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await api("api/admin/sigs", { ...Object.fromEntries(new FormData(e.target)), crew: sigCrew() });
+      e.target.reset();
+      $("#sig-note").textContent = "시그를 추가했습니다.";
+      await loadSigs();
+    } catch (err) {
+      $("#sig-note").textContent = err.message;
+    }
+  });
+
+  $("#sig-admin-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const card = btn.closest("[data-sig]");
+    const id = Number(card.dataset.sig);
+    const note = $("#sig-note");
+    if (btn.hasAttribute("data-lessons")) {
+      openSigs.has(id) ? openSigs.delete(id) : openSigs.add(id);
+      $(".lesson-box", card).hidden = !openSigs.has(id);
+      btn.setAttribute("aria-expanded", String(openSigs.has(id)));
+      return;
+    }
+    if (btn.hasAttribute("data-delete")) {
+      if (!confirmClick(btn)) return;
+      return act(btn, async () => { await api(`api/admin/sigs/${id}/delete`, {}); await loadSigs(); });
+    }
+    if (btn.hasAttribute("data-save")) {
+      const v = (n) => $(`[name="${n}"]`, card);
+      return act(btn, async () => {
+        await api("api/admin/sigs", { id, category: v("category").value, name: v("name").value, price: v("price").value, ref_url: v("ref_url").value, hidden: v("hidden").checked });
+        note.textContent = "저장했습니다.";
+        await loadSigs();
+      });
+    }
+    if (btn.hasAttribute("data-add-link")) {
+      const input = $('[name="lesson_url"]', card);
+      return act(btn, async () => {
+        await api(`api/admin/sigs/${id}/lessons`, { url: input.value });
+        note.textContent = "레슨 영상을 추가했습니다.";
+        await loadSigs();
+      });
+    }
+    if (btn.dataset.lessonDel) {
+      if (!confirmClick(btn)) return;
+      return act(btn, async () => { await api(`api/admin/lessons/${btn.dataset.lessonDel}/delete`, {}); await loadSigs(); });
+    }
+  });
+
+  // 영상 파일 고르면 바로 업로드 (파일 대기 칸 채우기 / 새로 추가)
+  $("#sig-admin-list").addEventListener("change", async (e) => {
+    const input = e.target.closest("input[type=file]");
+    if (!input?.files[0]) return;
+    const card = input.closest("[data-sig]");
+    const file = input.files[0];
+    const note = $("#sig-note");
+    const q = input.dataset.fill ? `?lesson=${input.dataset.fill}` : "";
+    $$("input[type=file]", card).forEach((i) => (i.disabled = true));
+    note.textContent = `${file.name} 올리는 중… (${fmtSize(file.size)})`;
+    try {
+      await upload(`api/admin/sigs/${card.dataset.sig}/lessons/upload${q}`, file, $(".progress", card));
+      note.textContent = `${file.name} 올리기 완료`;
+      await loadSigs();
+    } catch (err) {
+      note.textContent = err.message;
+      $$("input[type=file]", card).forEach((i) => (i.disabled = false));
+    }
+  });
+
+  /* 엑셀 */
+  const HEADERS = ["제외", "분류", "시그 이름", "시그단가", "유튜브 레퍼런스", "레슨 영상"];
+
+  $("#excel-template").addEventListener("click", () => {
+    const ws = XLSX.utils.aoa_to_sheet([
+      HEADERS,
+      ["", "엑셀시그", "예시 시그 (이 줄은 지우세요)", 10000, "https://youtube.com/shorts/…", "예시.mp4"],
+    ]);
+    ws["!cols"] = [{ wch: 6 }, { wch: 12 }, { wch: 24 }, { wch: 12 }, { wch: 48 }, { wch: 40 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "시그");
+    XLSX.writeFile(wb, "시그_업로드_양식.xlsx");
+  });
+
+  // 제목 줄(시그 이름 …)을 찾아서 칸 위치를 맞춤 → 칸 순서가 달라도 됨
+  async function readExcel(file) {
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const ws = wb.Sheets[wb.SheetNames[0]];
+    if (!ws?.["!ref"]) return [];
+    const range = XLSX.utils.decode_range(ws["!ref"]);
+    const cell = (r, c) => (c === undefined ? undefined : ws[XLSX.utils.encode_cell({ r, c })]);
+    const text = (r, c) => { const x = cell(r, c); return x ? String(x.w ?? x.v ?? "").trim() : ""; };
+    const MATCH = { exclude: /제외/, category: /분류/, name: /이름/, price: /단가|가격/, ref: /레퍼런스|유튜브/, lessons: /레슨/ };
+
+    for (let head = range.s.r; head <= Math.min(range.e.r, range.s.r + 20); head++) {
+      const cols = {};
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        const t = text(head, c).replace(/\s/g, "");
+        for (const [key, re] of Object.entries(MATCH)) if (cols[key] === undefined && re.test(t)) { cols[key] = c; break; }
+      }
+      if (cols.name === undefined) continue;
+      const rows = [];
+      for (let r = head + 1; r <= range.e.r; r++) {
+        const name = text(r, cols.name);
+        if (!name) continue;
+        const ref = cell(r, cols.ref);
+        const lessons = cell(r, cols.lessons);
+        rows.push({
+          exclude: text(r, cols.exclude),
+          category: text(r, cols.category),
+          name,
+          price: cell(r, cols.price)?.v ?? "",
+          ref: text(r, cols.ref) || ref?.l?.Target || "",
+          lessons: text(r, cols.lessons),
+          lessonLink: lessons?.l?.Target || "",
+        });
+      }
+      return rows;
+    }
+    return [];
+  }
+
+  $("#excel-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const note = $("#excel-note");
+    const btn = $('[type="submit"]', form);
+    const prune = form.elements.prune.checked;
+    if (prune && !btn.dataset.armed) {
+      btn.dataset.armed = "1";
+      note.textContent = "엑셀에 없는 시그와 그 레슨 영상이 삭제됩니다. 계속하려면 업로드를 한 번 더 누르세요.";
+      setTimeout(() => delete btn.dataset.armed, 5000);
+      return;
+    }
+    btn.disabled = true;
+    note.textContent = "엑셀 읽는 중…";
+    try {
+      const rows = await readExcel(form.elements.file.files[0]);
+      const r = await api("api/admin/sigs/import", { crew: sigCrew(), rows, prune });
+      note.textContent = `완료: 추가 ${r.added} · 수정 ${r.updated} · 숨김 ${r.hidden}${r.removed ? ` · 삭제 ${r.removed}` : ""} · 레슨 링크 ${r.lessons} · 파일 대기 ${r.pending}${r.skipped ? ` · 건너뜀 ${r.skipped} (분류·단가 없는 줄)` : ""}`;
+      form.reset();
+      await loadSigs();
+    } catch (err) {
+      note.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+      delete btn.dataset.armed;
+    }
+  });
+
+  /* ---------- 파일 ---------- */
+  async function loadFiles() {
+    const crew = $("#file-crew").value;
+    const { items } = crew ? await api(`api/files?crew=${encodeURIComponent(crew)}`) : { items: [] };
+    $("#file-list").innerHTML = items.length
+      ? items.map((f) => `
+        <tr data-file="${f.id}">
+          <td><strong>${esc(f.title)}</strong></td>
+          <td class="muted">${esc(f.orig_name)}</td>
+          <td class="num">${fmtSize(f.size)}</td>
+          <td>${fmtDate(f.created_at)}</td>
+          <td class="right actions"><button type="button" class="mini-action danger" data-delete>삭제</button></td>
+        </tr>`).join("")
+      : `<tr><td colspan="5"><div class="empty">올린 파일이 없습니다.</div></td></tr>`;
+  }
+
+  $("#file-crew").addEventListener("change", loadFiles);
+
+  $("#file-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const form = e.target;
+    const file = form.elements.file.files[0];
+    const btn = $('[type="submit"]', form);
+    const note = $("#file-note");
+    btn.disabled = true;
+    note.textContent = `${file.name} 올리는 중… (${fmtSize(file.size)})`;
+    try {
+      const q = new URLSearchParams({ crew: $("#file-crew").value, title: form.elements.title.value });
+      await upload(`api/admin/files/upload?${q}`, file, $("#file-progress"));
+      note.textContent = "올리기 완료";
+      form.reset();
+      await loadFiles();
+    } catch (err) {
+      note.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#file-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("[data-delete]");
+    if (!btn || !confirmClick(btn)) return;
+    act(btn, async () => { await api(`api/admin/files/${btn.closest("[data-file]").dataset.file}/delete`, {}); await loadFiles(); });
   });
 
   /* ---------- 유튜브 채널 ---------- */

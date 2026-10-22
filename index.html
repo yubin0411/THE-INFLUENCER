@@ -73,7 +73,7 @@
         <div class="table-wrap">
           <table class="sig-table">
             <thead>
-              <tr><th>시그</th><th>크루</th><th class="num">가격</th><th>등록일</th><th class="center">미리듣기</th></tr>
+              <tr><th>분류</th><th>시그 이름</th><th>크루</th><th class="num">시그단가</th><th class="center">레퍼런스 · 레슨</th></tr>
             </thead>
             <tbody id="sig-list"></tbody>
           </table>
@@ -166,16 +166,16 @@
     </div>
   </dialog>
 
-  <!-- 시그 미리듣기 -->
-  <dialog class="modal" id="modal-audio" aria-labelledby="audio-title">
+  <!-- 시그 자세히 (레퍼런스 + 레슨 영상) -->
+  <dialog class="modal modal-media" id="modal-sig" aria-labelledby="sig-title">
     <div class="modal-body">
       <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
-      <h2 id="audio-title"></h2>
-      <div id="audio-frame"></div>
+      <p class="crumb" id="sig-crumb"></p>
+      <h2 id="sig-title"></h2>
+      <div class="sig-media" id="sig-media"></div>
     </div>
   </dialog>
 
-  <script src="js/data.js"></script>
   <script src="js/common.js"></script>
   <script src="js/app.js"></script>
 </body>

@@ -97,17 +97,32 @@ route("GET", "/api/live", () => ({
 }));
 
 // 게시글/쇼츠 목록 (누적, 최신순, before 로 더 불러오기)
+//   channel=UC...  → 그 계정 영상만
+//   latest=1       → 계정마다 가장 최근 영상 1개씩 (홈 화면용)
 route("GET", "/api/videos", (req, _p, url) => {
   const type = url.searchParams.get("type") === "short" ? "short" : "post";
   const crew = url.searchParams.get("crew");
+  const channel = url.searchParams.get("channel");
+  const latest = url.searchParams.get("latest") === "1";
   const before = Number(url.searchParams.get("before")) || Number.MAX_SAFE_INTEGER;
   const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 60);
-  const rows = db.prepare(`
-    SELECT ${videoFields} FROM videos v JOIN channels c ON c.id = v.channel_id
-    WHERE v.type = ? AND v.live = 'none' AND v.published_at < ? ${crew ? "AND c.crew_id = ?" : ""}
-    ORDER BY v.published_at DESC LIMIT ?
-  `).all(type, before, ...(crew ? [crew] : []), limit + 1);
-  return { items: rows.slice(0, limit), more: rows.length > limit };
+  const where = ["v.type = ?", "v.live = 'none'"];
+  const args = [type];
+  if (crew) where.push("c.crew_id = ?"), args.push(crew);
+  if (channel) where.push("c.id = ?"), args.push(channel);
+  const rows = latest
+    ? db.prepare(`
+        SELECT * FROM (
+          SELECT ${videoFields}, ROW_NUMBER() OVER (PARTITION BY v.channel_id ORDER BY v.published_at DESC) AS rn
+          FROM videos v JOIN channels c ON c.id = v.channel_id WHERE ${where.join(" AND ")}
+        ) WHERE rn = 1 AND published_at < ? ORDER BY published_at DESC LIMIT ?
+      `).all(...args, before, limit + 1)
+    : db.prepare(`
+        SELECT ${videoFields} FROM videos v JOIN channels c ON c.id = v.channel_id
+        WHERE ${where.join(" AND ")} AND v.published_at < ?
+        ORDER BY v.published_at DESC LIMIT ?
+      `).all(...args, before, limit + 1);
+  return { items: rows.slice(0, limit).map(({ rn, ...v }) => v), more: rows.length > limit };
 });
 
 // 자세히 보기
@@ -268,6 +283,10 @@ route("POST", "/api/admin/crews/:id/move", async (req, p) => {
 
 route("POST", "/api/admin/crews/:id/delete", (req, p) => {
   requireAdmin(req);
+  removeStored([
+    ...db.prepare("SELECT l.file FROM lessons l JOIN sigs s ON s.id = l.sig_id WHERE s.crew_id = ? AND l.file IS NOT NULL").all(p.id).map((r) => `lessons/${r.file}`),
+    ...db.prepare("SELECT file FROM files WHERE crew_id = ?").all(p.id).map((r) => `files/${r.file}`),
+  ]);
   db.prepare("DELETE FROM crews WHERE id = ?").run(p.id);
   return { ok: true };
 });
@@ -324,18 +343,260 @@ route("POST", "/api/admin/requests/:id", async (req, p) => {
   return { ok: true };
 });
 
+/* ---------- 시그 · 레슨 영상 · 파일 ---------- */
+const MAX_UPLOAD = 2 * 1024 * 1024 * 1024; // 2GB
+
+// 올린 파일 지우기 (uploads/ 기준 경로 목록)
+function removeStored(list) {
+  for (const rel of list) if (rel) fs.rm(path.join(DATA_DIR, "uploads", rel), () => {});
+}
+
+// 파일 업로드: 요청 본문을 그대로 디스크에 저장 (X-Upload 헤더 필수 → 다른 사이트에서 못 보냄)
+async function saveUpload(req, dir) {
+  if (req.headers["x-upload"] !== "1") fail(415, "잘못된 업로드 요청입니다.");
+  const orig = str(decodeURIComponent(req.headers["x-filename"] || ""), 200) || "file";
+  const ext = (path.extname(orig).toLowerCase().match(/^\.[a-z0-9]{1,8}$/) || [""])[0];
+  const name = `${crypto.randomBytes(12).toString("hex")}${ext}`;
+  const dest = path.join(DATA_DIR, "uploads", dir, name);
+  const out = fs.createWriteStream(dest);
+  let size = 0;
+  try {
+    for await (const c of req) {
+      size += c.length;
+      if (size > MAX_UPLOAD) fail(413, "파일은 2GB 이하만 올릴 수 있습니다.");
+      if (!out.write(c)) await new Promise((r) => out.once("drain", r));
+    }
+    await new Promise((resolve, reject) => out.end((e) => (e ? reject(e) : resolve())));
+  } catch (e) {
+    out.destroy();
+    fs.rm(dest, () => {});
+    throw e;
+  }
+  if (!size) { fs.rm(dest, () => {}); fail(400, "빈 파일입니다."); }
+  return { file: name, orig, size };
+}
+
+const ytId = (u) => String(u).match(/(?:youtu\.be\/|\/shorts\/|\/live\/|\/embed\/|[?&]v=)([\w-]{11})/)?.[1];
+const driveId = (u) => String(u).match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([\w-]{10,})/)?.[1];
+const lessonKind = (u) => (ytId(u) ? "youtube" : driveId(u) ? "drive" : "link");
+const parsePrice = (v) => Number(String(v ?? "").replace(/[^\d]/g, "")) || 0;
+
+// 레슨 칸 → 링크 / 파일 이름 목록 ("레몬에이드.mp4 레몬에이드 0.7.mp4" 처럼 여러 개도 분리)
+function lessonTokens(text) {
+  return [...String(text || "").matchAll(/https?:\/\/\S+|\S.*?\.(?:mp4|mov|m4v|webm|avi|mkv)(?=\s|$)/gi)].map((m) => m[0].trim());
+}
+
+const sigFields = `s.id, s.crew_id AS crew, s.category, s.name, s.price, s.ref_url, s.created_at,
+  (SELECT COUNT(*) FROM lessons l WHERE l.sig_id = s.id AND l.kind != 'pending') AS lessons,
+  (SELECT MAX(l.created_at) FROM lessons l WHERE l.sig_id = s.id AND l.kind != 'pending') AS last_lesson_at`;
+
+// 시그 목록 (공개)
+route("GET", "/api/sigs", (req, _p, url) => {
+  const crew = url.searchParams.get("crew");
+  return db.prepare(`SELECT ${sigFields} FROM sigs s WHERE s.hidden = 0 ${crew ? "AND s.crew_id = ?" : ""} ORDER BY s.sort, s.id`)
+    .all(...(crew ? [crew] : []));
+});
+
+// 시그 자세히 + 레슨 영상 (레슨은 승인된 회원만)
+route("GET", "/api/sigs/:id", (req, p) => {
+  const sig = db.prepare(`SELECT ${sigFields} FROM sigs s WHERE s.id = ? AND s.hidden = 0`).get(Number(p.id)) || fail(404, "시그를 찾을 수 없습니다.");
+  const user = auth.currentUser(req);
+  if (!user) return { ...sig, locked: true, items: [] };
+  const items = db.prepare("SELECT id, title, kind, url, file, size FROM lessons WHERE sig_id = ? AND kind != 'pending' ORDER BY id").all(sig.id)
+    .map(({ file, ...l }) => ({ ...l, src: file ? `/media/lessons/${file}` : null }));
+  return { ...sig, locked: false, items };
+});
+
+// 파일 다운로드 목록 (목록은 공개, 받기는 회원만)
+route("GET", "/api/files", (req, _p, url) => {
+  const crew = url.searchParams.get("crew");
+  const rows = db.prepare(`SELECT id, crew_id AS crew, title, orig_name, size, created_at FROM files ${crew ? "WHERE crew_id = ?" : ""} ORDER BY created_at DESC`)
+    .all(...(crew ? [crew] : []));
+  const locked = !auth.currentUser(req);
+  return { items: locked ? rows : rows.map((f) => ({ ...f, href: `/media/files/${db.prepare("SELECT file FROM files WHERE id = ?").get(f.id).file}` })), locked };
+});
+
+/* 관리자: 시그 */
+route("GET", "/api/admin/sigs", (req, _p, url) => {
+  requireAdmin(req);
+  const crew = url.searchParams.get("crew") || fail(400, "크루를 고르세요.");
+  const sigs = db.prepare("SELECT id, category, name, price, ref_url, hidden, created_at FROM sigs WHERE crew_id = ? ORDER BY sort, id").all(crew);
+  const lessons = db.prepare("SELECT l.id, l.sig_id, l.title, l.kind, l.url, l.file, l.size FROM lessons l JOIN sigs s ON s.id = l.sig_id WHERE s.crew_id = ? ORDER BY l.id").all(crew);
+  return sigs.map((sg) => ({ ...sg, items: lessons.filter((l) => l.sig_id === sg.id) }));
+});
+
+route("POST", "/api/admin/sigs", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  const name = str(b.name, 100) || fail(400, "시그 이름을 입력하세요.");
+  const v = [str(b.category, 30), name, parsePrice(b.price), str(b.ref_url, 500), b.hidden ? 1 : 0, Date.now()];
+  if (b.id) {
+    db.prepare("UPDATE sigs SET category = ?, name = ?, price = ?, ref_url = ?, hidden = ?, updated_at = ? WHERE id = ?").run(...v, Number(b.id));
+    return { ok: true };
+  }
+  const crew = str(b.crew, 30);
+  if (!db.prepare("SELECT 1 FROM crews WHERE id = ?").get(crew)) fail(400, "크루를 고르세요.");
+  const sort = (db.prepare("SELECT MAX(sort) AS m FROM sigs WHERE crew_id = ?").get(crew).m ?? 0) + 1;
+  const r = db.prepare("INSERT INTO sigs (crew_id, category, name, price, ref_url, hidden, updated_at, sort, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(crew, ...v, sort, Date.now());
+  return { ok: true, id: Number(r.lastInsertRowid) };
+});
+
+route("POST", "/api/admin/sigs/:id/delete", (req, p) => {
+  requireAdmin(req);
+  removeStored(db.prepare("SELECT file FROM lessons WHERE sig_id = ? AND file IS NOT NULL").all(Number(p.id)).map((r) => `lessons/${r.file}`));
+  db.prepare("DELETE FROM sigs WHERE id = ?").run(Number(p.id));
+  return { ok: true };
+});
+
+// 엑셀 업로드: 같은 이름은 수정, 새 이름은 추가 (이름이 같은 시그가 여럿이면 순서대로 짝지음)
+route("POST", "/api/admin/sigs/import", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req, 20 * 1024 * 1024);
+  const crew = str(b.crew, 30);
+  if (!db.prepare("SELECT 1 FROM crews WHERE id = ?").get(crew)) fail(400, "크루를 고르세요.");
+  // 분류도 단가도 없는 줄(메모, 다른 표 등)은 시그가 아니므로 건너뜀
+  const all = (Array.isArray(b.rows) ? b.rows : []).map((r) => ({ ...r, name: str(r.name, 100) })).filter((r) => r.name);
+  const rows = all.filter((r) => str(r.category) || parsePrice(r.price));
+  if (!rows.length) fail(400, "엑셀에서 시그를 찾지 못했습니다. 양식의 제목 줄(시그 이름, 시그단가 …)을 확인하세요.");
+
+  const now = Date.now();
+  // 크루에 처음 올리는 목록은 NEW 표시를 붙이지 않음 (전부 NEW 로 뜨는 것 방지)
+  const first = !db.prepare("SELECT 1 FROM sigs WHERE crew_id = ?").get(crew);
+  const createdAt = first ? now - 30 * 864e5 : now;
+  const stat = { added: 0, updated: 0, hidden: 0, removed: 0, lessons: 0, pending: 0, skipped: all.length - rows.length };
+  const existing = new Map();
+  for (const sg of db.prepare("SELECT id, name FROM sigs WHERE crew_id = ? ORDER BY sort, id").all(crew)) {
+    if (!existing.has(sg.name)) existing.set(sg.name, []);
+    existing.get(sg.name).push(sg.id);
+  }
+  const used = new Set();
+  const insertSig = db.prepare("INSERT INTO sigs (crew_id, category, name, price, ref_url, hidden, sort, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
+  const updateSig = db.prepare("UPDATE sigs SET category = ?, price = ?, ref_url = ?, hidden = ?, sort = ?, updated_at = ? WHERE id = ?");
+  const hasLesson = db.prepare("SELECT 1 FROM lessons WHERE sig_id = ? AND (url = ? OR (? != '' AND title = ?))");
+  const addLesson = db.prepare("INSERT INTO lessons (sig_id, title, kind, url, created_at) VALUES (?, ?, ?, ?, ?)");
+
+  tx(() => rows.forEach((r, i) => {
+    const hidden = /x|제외/i.test(String(r.exclude || "")) ? 1 : 0;
+    const vals = [str(r.category, 30), parsePrice(r.price), str(r.ref, 500), hidden, i + 1, now];
+    const id = (existing.get(r.name) || []).find((x) => !used.has(x));
+    let sigId;
+    if (id) {
+      updateSig.run(...vals, id);
+      sigId = id;
+      stat.updated++;
+    } else {
+      sigId = Number(insertSig.run(crew, vals[0], r.name, vals[1], vals[2], hidden, i + 1, createdAt, now).lastInsertRowid);
+      stat.added++;
+    }
+    used.add(sigId);
+    if (hidden) stat.hidden++;
+
+    const tokens = lessonTokens(r.lessons);
+    const fileNames = tokens.filter((t) => !/^https?:/i.test(t));
+    for (const t of tokens) {
+      const isUrl = /^https?:/i.test(t);
+      // 파일 이름 한 개에 링크가 걸려 있으면 (구글 드라이브 등) 그 링크로 등록
+      const url = isUrl ? t : fileNames.length === 1 && r.lessonLink ? str(r.lessonLink, 500) : "";
+      const title = isUrl ? "" : t;
+      if (hasLesson.get(sigId, url || "\u0000", title, title)) continue;
+      addLesson.run(sigId, title, url ? lessonKind(url) : "pending", url, now);
+      url ? stat.lessons++ : stat.pending++;
+    }
+  }));
+
+  if (b.prune) {
+    const gone = db.prepare("SELECT id FROM sigs WHERE crew_id = ?").all(crew).map((r) => r.id).filter((id) => !used.has(id));
+    for (const id of gone) {
+      removeStored(db.prepare("SELECT file FROM lessons WHERE sig_id = ? AND file IS NOT NULL").all(id).map((r) => `lessons/${r.file}`));
+      db.prepare("DELETE FROM sigs WHERE id = ?").run(id);
+    }
+    stat.removed = gone.length;
+  }
+  return { ok: true, ...stat };
+});
+
+/* 관리자: 레슨 영상 */
+route("POST", "/api/admin/sigs/:id/lessons", async (req, p) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  const url = str(b.url, 500);
+  if (!/^https?:\/\//i.test(url)) fail(400, "유튜브나 구글 드라이브 링크를 넣으세요.");
+  db.prepare("SELECT 1 FROM sigs WHERE id = ?").get(Number(p.id)) || fail(404, "시그를 찾을 수 없습니다.");
+  db.prepare("INSERT INTO lessons (sig_id, title, kind, url, created_at) VALUES (?, ?, ?, ?, ?)").run(Number(p.id), str(b.title, 100), lessonKind(url), url, Date.now());
+  return { ok: true };
+});
+
+// 영상 파일 올리기: lesson 이 있으면 그 칸(파일 대기)에 채우고, 없으면 새로 추가
+route("POST", "/api/admin/sigs/:id/lessons/upload", async (req, p, url) => {
+  requireAdmin(req);
+  const sigId = Number(p.id);
+  db.prepare("SELECT 1 FROM sigs WHERE id = ?").get(sigId) || fail(404, "시그를 찾을 수 없습니다.");
+  const lessonId = Number(url.searchParams.get("lesson")) || null;
+  const old = lessonId && (db.prepare("SELECT id, title, file FROM lessons WHERE id = ? AND sig_id = ?").get(lessonId, sigId) || fail(404, "레슨 영상을 찾을 수 없습니다."));
+  const up = await saveUpload(req, "lessons");
+  if (old) {
+    removeStored([old.file && `lessons/${old.file}`]);
+    db.prepare("UPDATE lessons SET kind = 'file', url = '', file = ?, size = ?, title = ?, created_at = ? WHERE id = ?")
+      .run(up.file, up.size, old.title || up.orig, Date.now(), old.id);
+  } else {
+    db.prepare("INSERT INTO lessons (sig_id, title, kind, file, size, created_at) VALUES (?, ?, 'file', ?, ?, ?)").run(sigId, up.orig, up.file, up.size, Date.now());
+  }
+  return { ok: true };
+});
+
+route("POST", "/api/admin/lessons/:id/delete", (req, p) => {
+  requireAdmin(req);
+  const l = db.prepare("SELECT file FROM lessons WHERE id = ?").get(Number(p.id));
+  removeStored([l?.file && `lessons/${l.file}`]);
+  db.prepare("DELETE FROM lessons WHERE id = ?").run(Number(p.id));
+  return { ok: true };
+});
+
+/* 관리자: 파일 */
+route("POST", "/api/admin/files/upload", async (req, _p, url) => {
+  requireAdmin(req);
+  const crew = str(url.searchParams.get("crew"), 30);
+  if (!db.prepare("SELECT 1 FROM crews WHERE id = ?").get(crew)) fail(400, "크루를 고르세요.");
+  const up = await saveUpload(req, "files");
+  const title = str(url.searchParams.get("title"), 100) || up.orig;
+  db.prepare("INSERT INTO files (crew_id, title, file, orig_name, size, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(crew, title, up.file, up.orig, up.size, Date.now());
+  return { ok: true };
+});
+
+route("POST", "/api/admin/files/:id/delete", (req, p) => {
+  requireAdmin(req);
+  const f = db.prepare("SELECT file FROM files WHERE id = ?").get(Number(p.id));
+  removeStored([f && `files/${f.file}`]);
+  db.prepare("DELETE FROM files WHERE id = ?").run(Number(p.id));
+  return { ok: true };
+});
+
 /* ---------- 정적 파일 ---------- */
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".webp": "image/webp", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".mp4": "video/mp4", ".webm": "video/webm",
   ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+  ".mov": "video/quicktime", ".m4v": "video/mp4", ".pdf": "application/pdf", ".zip": "application/zip",
 };
 
-function serveFile(res, file) {
+function serveFile(res, file, { req, download } = {}) {
   fs.stat(file, (err, st) => {
     if (err || !st.isFile()) { res.writeHead(404); return res.end("Not found"); }
-    res.writeHead(200, { "Content-Type": TYPES[path.extname(file).toLowerCase()] || "application/octet-stream", "Content-Length": st.size });
+    const headers = { "Content-Type": TYPES[path.extname(file).toLowerCase()] || "application/octet-stream", "Accept-Ranges": "bytes" };
+    if (download) headers["Content-Disposition"] = `attachment; filename*=UTF-8''${encodeURIComponent(download)}`;
+    // 영상 중간으로 넘기기 (Range 요청)
+    const range = req?.headers.range?.match(/^bytes=(\d*)-(\d*)$/);
+    if (range && (range[1] || range[2])) {
+      let start = range[1] ? Number(range[1]) : st.size - Number(range[2]);
+      let end = range[1] && range[2] ? Math.min(Number(range[2]), st.size - 1) : st.size - 1;
+      start = Math.max(0, start);
+      if (start > end || start >= st.size) { res.writeHead(416, { "Content-Range": `bytes */${st.size}` }); return res.end(); }
+      res.writeHead(206, { ...headers, "Content-Range": `bytes ${start}-${end}/${st.size}`, "Content-Length": end - start + 1 });
+      return fs.createReadStream(file, { start, end }).pipe(res);
+    }
+    res.writeHead(200, { ...headers, "Content-Length": st.size });
     fs.createReadStream(file).pipe(res);
   });
 }
@@ -365,6 +626,14 @@ http.createServer(async (req, res) => {
     const name = path.basename(pathname);
     if (u?.role !== "admin" || !/^[a-f0-9]+\.\w+$/.test(name)) { res.writeHead(404); return res.end("Not found"); }
     return serveFile(res, path.join(DATA_DIR, "uploads", name));
+  }
+
+  // 레슨 영상 · 다운로드 파일 (승인된 회원만)
+  const media = pathname.match(/^\/media\/(lessons|files)\/([a-f0-9]{24}(?:\.[a-z0-9]{1,8})?)$/);
+  if (media) {
+    if (!auth.currentUser(req)) { res.writeHead(401, { "Content-Type": "text/plain; charset=utf-8" }); return res.end("로그인이 필요합니다."); }
+    const f = media[1] === "files" && db.prepare("SELECT orig_name FROM files WHERE file = ?").get(media[2]);
+    return serveFile(res, path.join(DATA_DIR, "uploads", media[1], media[2]), { req, download: f?.orig_name });
   }
 
   const rel = pathname.replace(/^\/+/, "") || "index.html";
