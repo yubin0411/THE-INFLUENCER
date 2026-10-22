@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <title>(주) 이터널</title>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <link rel="stylesheet" href="css/style.css">
+  <script>
+    // 저장된 테마를 먼저 적용해 깜빡임 방지
+    try {
+      if (localStorage.getItem("eternal-theme") === "light") document.documentElement.dataset.theme = "light";
+    } catch {}
+  </script>
+</head>
+<body>
+  <a class="skip-link" href="#main">본문 바로가기</a>
+
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="logo" href="#home" data-crew="all">
+        <span class="logo-mark">E</span>
+        <span class="logo-text">(주) 이터널</span>
+      </a>
+
+      <nav class="desktop-nav" aria-label="메인 메뉴" id="desktop-nav"></nav>
+
+      <div class="header-actions">
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="테마 변경">
+          <span class="theme-label">White</span>
+        </button>
+        <button class="text-btn" type="button" data-open="modal-backwall" data-need-login>백월 요청</button>
+        <button class="text-btn" type="button" data-open="modal-recommend" data-need-login>추천 노래</button>
+        <div class="user-area" id="user-area">
+          <button class="primary-btn" type="button" data-open="modal-login">로그인</button>
+        </div>
+        <button class="icon-btn menu-btn" id="menu-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+      </div>
+    </div>
+    <nav class="mobile-nav" id="mobile-nav" aria-label="모바일 메뉴" hidden></nav>
+  </header>
+
+  <main id="main" class="main">
+    <h1 class="sr-only">(주) 이터널 통합 홈</h1>
+
+    <div id="home-view" class="view">
+      <!-- 라이브 (라이브 중인 채널이 있을 때만 표시) -->
+      <section class="panel" id="home-live" aria-labelledby="live-title" hidden>
+        <div class="panel-head">
+          <h2 id="live-title"><span class="live-dot"></span>지금 방송 중</h2>
+          <div class="chips" id="live-filter"></div>
+        </div>
+        <div class="live-grid" id="live-list"></div>
+      </section>
+
+      <!-- 크루별 게시글 / 쇼츠 (자동 생성) -->
+      <div id="crew-sections" class="view"></div>
+
+      <!-- 새로 들어온 시그 -->
+      <section class="panel" id="new-sigs" aria-labelledby="new-sigs-title">
+        <div class="panel-head">
+          <h2 id="new-sigs-title">새로 들어온 시그</h2>
+          <label class="search">
+            <span class="sr-only">시그 검색</span>
+            <input type="search" id="sig-search" placeholder="시그 이름 · 가격 검색">
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table class="sig-table">
+            <thead>
+              <tr><th>시그</th><th>크루</th><th class="num">가격</th><th>등록일</th><th class="center">미리듣기</th></tr>
+            </thead>
+            <tbody id="sig-list"></tbody>
+          </table>
+        </div>
+        <nav class="pagination" id="sig-pages" aria-label="시그 목록 페이지"></nav>
+      </section>
+    </div>
+
+    <!-- 전체보기 -->
+    <section class="panel" id="list-view" hidden aria-labelledby="list-title">
+      <div class="panel-head">
+        <h2 id="list-title"></h2>
+        <button type="button" class="ghost-btn" id="list-back">← 홈으로</button>
+      </div>
+      <div class="video-grid" id="list-grid"></div>
+      <div class="more-wrap"><button type="button" class="ghost-btn" id="list-more" hidden>더 보기</button></div>
+    </section>
+  </main>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <div>
+        <strong class="footer-logo">(주) 이터널</strong>
+        <p class="footer-meta">대표 : 000 &nbsp;|&nbsp; 사업자등록번호 : 000-00-00000<br>주소 : 주소를 입력하세요 &nbsp;|&nbsp; 문의 : contact@example.com</p>
+      </div>
+      <p class="copyright">© <span id="year"></span> ETERNAL Inc. All rights reserved.</p>
+    </div>
+  </footer>
+
+  <!-- 로그인 / 회원가입 -->
+  <dialog class="modal" id="modal-login" aria-labelledby="login-title">
+    <form class="modal-body" id="auth-form" data-mode="login">
+      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
+      <h2 id="login-title">이터널 계정</h2>
+      <div class="tabs" role="tablist">
+        <button type="button" class="tab is-active" data-tab="login">로그인</button>
+        <button type="button" class="tab" data-tab="signup">회원가입</button>
+      </div>
+      <label class="field">아이디<input name="username" autocomplete="username" required></label>
+      <label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+      <label class="field signup-only" hidden>비밀번호 확인<input name="password2" type="password" autocomplete="new-password"></label>
+      <label class="field signup-only" hidden>닉네임<input name="nickname"></label>
+      <label class="field signup-only" hidden>승인코드<input name="code" placeholder="관리자에게 받은 코드"></label>
+      <p class="hint signup-only" hidden>가입 신청 후 관리자가 승인하면 로그인할 수 있습니다.</p>
+      <button class="primary-btn wide" type="submit">확인</button>
+      <p class="form-note" aria-live="polite"></p>
+    </form>
+  </dialog>
+
+  <!-- 추천 노래 -->
+  <dialog class="modal" id="modal-recommend" aria-labelledby="recommend-title">
+    <form class="modal-body" data-request="recommend">
+      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
+      <h2 id="recommend-title">추천 노래 요청</h2>
+      <label class="field">곡 제목<input name="song" required></label>
+      <label class="field">아티스트<input name="artist"></label>
+      <label class="field">링크<input name="url" type="url" placeholder="https://"></label>
+      <label class="field">메모<textarea name="memo" rows="3"></textarea></label>
+      <button class="primary-btn wide" type="submit">요청 보내기</button>
+      <p class="form-note" aria-live="polite"></p>
+    </form>
+  </dialog>
+
+  <!-- 백월 요청 -->
+  <dialog class="modal" id="modal-backwall" aria-labelledby="backwall-title">
+    <form class="modal-body" data-request="backwall">
+      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
+      <h2 id="backwall-title">백월 요청</h2>
+      <label class="field">멤버<select name="member" id="backwall-member"></select></label>
+      <label class="field">요청 내용<textarea name="content" rows="4" required></textarea></label>
+      <label class="field">첨부 사진<input name="image" type="file" accept="image/png,image/jpeg,image/gif,image/webp"></label>
+      <button class="primary-btn wide" type="submit">요청 보내기</button>
+      <p class="form-note" aria-live="polite"></p>
+    </form>
+  </dialog>
+
+  <!-- 자세히 보기 -->
+  <dialog class="modal modal-media" id="modal-detail" aria-labelledby="detail-title">
+    <div class="modal-body">
+      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
+      <div class="detail-player" id="detail-player"></div>
+      <h2 id="detail-title"></h2>
+      <div class="detail-meta" id="detail-meta"></div>
+      <p class="detail-desc" id="detail-desc"></p>
+      <a class="primary-btn" id="detail-link" target="_blank" rel="noopener">유튜브에서 보기</a>
+    </div>
+  </dialog>
+
+  <!-- 시그 미리듣기 -->
+  <dialog class="modal" id="modal-audio" aria-labelledby="audio-title">
+    <div class="modal-body">
+      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
+      <h2 id="audio-title"></h2>
+      <div id="audio-frame"></div>
+    </div>
+  </dialog>
+
+  <script src="js/data.js"></script>
+  <script src="js/common.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

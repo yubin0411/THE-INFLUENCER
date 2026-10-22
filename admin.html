@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="ko" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>관리자 · (주) 이터널</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/admin.css">
+  <script>
+    try {
+      if (localStorage.getItem("eternal-theme") === "light") document.documentElement.dataset.theme = "light";
+    } catch {}
+  </script>
+</head>
+<body>
+  <header class="site-header">
+    <div class="header-inner">
+      <a class="logo" href="./">
+        <span class="logo-mark">E</span>
+        <span class="logo-text">(주) 이터널 <small class="admin-badge">관리자</small></span>
+      </a>
+      <div class="header-actions">
+        <button class="icon-btn" id="theme-toggle" type="button" aria-label="테마 변경"><span class="theme-label">White</span></button>
+        <a class="text-btn" href="./">사이트로</a>
+        <button class="ghost-btn" type="button" id="logout-btn" hidden>로그아웃</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="main admin-main">
+    <!-- 관리자 로그인 -->
+    <section class="panel login-panel" id="login-view" hidden>
+      <form class="modal-body" id="admin-login">
+        <h2>관리자 로그인</h2>
+        <label class="field">아이디<input name="username" autocomplete="username" required></label>
+        <label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="primary-btn wide" type="submit">로그인</button>
+        <p class="form-note" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <div id="admin-view" hidden>
+      <nav class="admin-tabs" role="tablist" aria-label="관리 메뉴">
+        <button type="button" role="tab" class="is-active" data-panel="users">회원 승인 <span class="count" id="pending-count" hidden></span></button>
+        <button type="button" role="tab" data-panel="codes">승인코드</button>
+        <button type="button" role="tab" data-panel="channels">유튜브 채널</button>
+        <button type="button" role="tab" data-panel="crews">크루</button>
+        <button type="button" role="tab" data-panel="requests">요청함 <span class="count" id="unread-count" hidden></span></button>
+        <button type="button" role="tab" data-panel="account">내 계정</button>
+      </nav>
+
+      <!-- 회원 -->
+      <section class="panel" data-view="users">
+        <div class="panel-head">
+          <h2>회원 승인 · 관리</h2>
+          <div class="chips" id="user-filter">
+            <button type="button" class="chip is-active" data-status="pending">승인 대기</button>
+            <button type="button" class="chip" data-status="approved">승인됨</button>
+            <button type="button" class="chip" data-status="rejected">거절됨</button>
+            <button type="button" class="chip" data-status="all">전체</button>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="sig-table admin-table">
+            <thead><tr><th>아이디</th><th>닉네임</th><th>사용한 코드</th><th>가입일</th><th>상태</th><th class="right">관리</th></tr></thead>
+            <tbody id="user-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 승인코드 -->
+      <section class="panel" data-view="codes" hidden>
+        <div class="panel-head"><h2>승인코드</h2></div>
+        <p class="hint">회원가입할 때 이 코드를 입력해야 가입 신청이 됩니다. 신청 후 [회원 승인]에서 승인해야 로그인할 수 있습니다.</p>
+        <form class="inline-form" id="code-form">
+          <label class="field">코드 (비우면 자동 생성)<input name="code" maxlength="50" pattern="[A-Za-z0-9_\-]+"></label>
+          <label class="field">메모<input name="memo" maxlength="200" placeholder="예: 10월 신규 멤버용"></label>
+          <label class="field">사용 횟수 제한<input name="max_uses" type="number" min="1" placeholder="무제한"></label>
+          <button class="primary-btn" type="submit">코드 만들기</button>
+        </form>
+        <p class="form-note" id="code-note" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table class="sig-table admin-table">
+            <thead><tr><th>코드</th><th>메모</th><th class="num">사용</th><th>상태</th><th>만든 날</th><th class="right">관리</th></tr></thead>
+            <tbody id="code-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 유튜브 채널 -->
+      <section class="panel" data-view="channels" hidden>
+        <div class="panel-head">
+          <h2>유튜브 채널</h2>
+          <button type="button" class="ghost-btn" id="sync-btn">지금 새로고침</button>
+        </div>
+        <p class="hint">여기 등록한 채널만 라이브 · 게시글 · Shorts 에 표시됩니다. 새 영상은 1분 안에 자동으로 올라오고 계속 누적됩니다.</p>
+        <form class="inline-form" id="channel-form">
+          <label class="field grow">채널 (@핸들, 채널 주소, 채널 ID)<input name="channel" required placeholder="@channel 또는 https://www.youtube.com/@channel"></label>
+          <label class="field">멤버 이름<input name="name" maxlength="30" placeholder="비우면 채널 이름"></label>
+          <label class="field">크루<select name="crew" class="crew-select"></select></label>
+          <button class="primary-btn" type="submit">채널 추가</button>
+        </form>
+        <p class="form-note" id="channel-note" aria-live="polite"></p>
+        <div class="channel-list" id="channel-list"></div>
+      </section>
+
+      <!-- 크루 -->
+      <section class="panel" data-view="crews" hidden>
+        <div class="panel-head"><h2>크루</h2></div>
+        <p class="hint">사이트 상단 메뉴에 표시됩니다. 순서 숫자가 작을수록 앞에 나옵니다.</p>
+        <form class="inline-form" id="crew-form">
+          <label class="field">크루 이름<input name="name" required maxlength="30"></label>
+          <label class="field">순서<input name="sort" type="number" value="0"></label>
+          <button class="primary-btn" type="submit">크루 추가</button>
+        </form>
+        <p class="form-note" id="crew-note" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table class="sig-table admin-table">
+            <thead><tr><th>크루 이름</th><th>순서</th><th>ID</th><th class="right">관리</th></tr></thead>
+            <tbody id="crew-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 요청함 -->
+      <section class="panel" data-view="requests" hidden>
+        <div class="panel-head">
+          <h2>요청함</h2>
+          <div class="chips" id="request-filter">
+            <button type="button" class="chip is-active" data-type="all">전체</button>
+            <button type="button" class="chip" data-type="recommend">추천 노래</button>
+            <button type="button" class="chip" data-type="backwall">백월 요청</button>
+          </div>
+        </div>
+        <div class="request-list" id="request-list"></div>
+      </section>
+
+      <!-- 내 계정 -->
+      <section class="panel" data-view="account" hidden>
+        <div class="panel-head"><h2>비밀번호 변경</h2></div>
+        <form class="modal-body narrow" id="password-form">
+          <label class="field">현재 비밀번호<input name="current" type="password" autocomplete="current-password" required></label>
+          <label class="field">새 비밀번호 (8자 이상)<input name="next" type="password" autocomplete="new-password" minlength="8" required></label>
+          <label class="field">새 비밀번호 확인<input name="next2" type="password" autocomplete="new-password" minlength="8" required></label>
+          <button class="primary-btn" type="submit">변경</button>
+          <p class="form-note" aria-live="polite"></p>
+        </form>
+      </section>
+    </div>
+  </main>
+
+  <dialog class="modal" id="modal-image" aria-label="첨부 사진">
+    <div class="modal-body">
+      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
+      <img id="image-view" alt="첨부 사진">
+    </div>
+  </dialog>
+
+  <script src="js/common.js"></script>
+  <script src="js/admin.js"></script>
+</body>
+</html>
