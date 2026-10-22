@@ -7,6 +7,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const { DatabaseSync } = require("node:sqlite");
 
 loadEnv();
 
@@ -572,6 +573,62 @@ route("POST", "/api/admin/files/:id/delete", (req, p) => {
   return { ok: true };
 });
 
+/* ---------- 백업 · 복원 (다른 서버로 옮길 때, 정기 백업) ---------- */
+// 올린 영상·파일은 백업에 들어가지 않음 (데이터베이스만)
+const BACKUP_TABLES = ["users", "codes", "crews", "channels", "videos", "sigs", "lessons", "files", "requests"];
+
+route("GET", "/api/admin/backup", (req, _p, _u, res) => {
+  requireAdmin(req);
+  const tmp = path.join(DATA_DIR, `backup-${crypto.randomBytes(6).toString("hex")}.db`);
+  try {
+    db.prepare("VACUUM INTO ?").run(tmp);
+    const buf = fs.readFileSync(tmp);
+    const d = new Date();
+    const name = `eternal-backup-${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}.db`;
+    res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": buf.length, "Content-Disposition": `attachment; filename="${name}"`, "Cache-Control": "no-store" });
+    res.end(buf);
+  } finally {
+    fs.rm(tmp, { force: true }, () => {});
+  }
+});
+
+route("POST", "/api/admin/restore", async (req) => {
+  requireAdmin(req);
+  const up = await saveUpload(req, ".");
+  const file = path.join(DATA_DIR, "uploads", up.file);
+  try {
+    // 진짜 백업 파일인지 확인 (관리자 계정이 있어야 함)
+    let admins = 0;
+    try {
+      const src = new DatabaseSync(file, { readOnly: true });
+      try { admins = src.prepare("SELECT COUNT(*) AS c FROM users WHERE role = 'admin'").get().c; } finally { src.close(); }
+    } catch { fail(400, "이 사이트의 백업 파일이 아닙니다."); }
+    if (!admins) fail(400, "백업에 관리자 계정이 없어서 복원할 수 없습니다.");
+
+    const counts = {};
+    db.exec("PRAGMA foreign_keys = OFF");
+    db.prepare("ATTACH DATABASE ? AS src").run(file);
+    try {
+      tx(() => {
+        for (const t of BACKUP_TABLES) {
+          const srcCols = new Set(db.prepare(`PRAGMA src.table_info(${t})`).all().map((c) => c.name));
+          const cols = db.prepare(`PRAGMA main.table_info(${t})`).all().map((c) => c.name).filter((c) => srcCols.has(c)).join(", ");
+          db.exec(`DELETE FROM main.${t}`);
+          if (cols) db.exec(`INSERT INTO main.${t} (${cols}) SELECT ${cols} FROM src.${t}`);
+          counts[t] = db.prepare(`SELECT COUNT(*) AS c FROM main.${t}`).get().c;
+        }
+        db.exec("DELETE FROM main.sessions");
+      });
+    } finally {
+      db.exec("DETACH DATABASE src");
+      db.exec("PRAGMA foreign_keys = ON");
+    }
+    return { ok: true, counts };
+  } finally {
+    fs.rm(file, { force: true }, () => {});
+  }
+});
+
 /* ---------- 정적 파일 ---------- */
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -611,7 +668,8 @@ http.createServer(async (req, res) => {
       if (!m) continue;
       try {
         const params = Object.fromEntries(r.keys.map((k, i) => [k, m[i + 1]]));
-        return sendJson(res, 200, await r.handler(req, params, url, res));
+        const out = await r.handler(req, params, url, res);
+        return res.headersSent ? undefined : sendJson(res, 200, out);
       } catch (e) {
         if (!(e instanceof HttpError)) console.error(e);
         return sendJson(res, e.status || 500, { error: e instanceof HttpError ? e.message : "서버 오류가 발생했습니다." });

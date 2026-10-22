@@ -216,6 +216,18 @@
           <button class="primary-btn" type="submit">변경</button>
           <p class="form-note" aria-live="polite"></p>
         </form>
+
+        <div class="box backup-box">
+          <h3>백업 · 복원</h3>
+          <p class="hint">회원 · 승인코드 · 크루 · 유튜브 채널 · 시그 · 레슨 링크 · 요청함을 파일 하나로 받아 둘 수 있습니다. 다른 서버로 옮길 때는 새 서버의 관리자 페이지에서 이 파일로 복원하세요.<br>
+            직접 올린 영상 파일과 다운로드 파일은 백업에 들어가지 않습니다. <b>복원하면 지금 데이터는 백업 내용으로 바뀌고, 모두 로그아웃됩니다.</b></p>
+          <div class="inline-form">
+            <a class="ghost-btn" href="api/admin/backup" download>백업 받기</a>
+            <label class="field grow">백업 파일로 복원 (.db)<input type="file" id="restore-file" accept=".db"></label>
+            <button class="primary-btn" type="button" id="restore-btn">복원</button>
+          </div>
+          <p class="form-note" id="restore-note" aria-live="polite"></p>
+        </div>
       </section>
     </div>
   </main>

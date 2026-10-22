@@ -1,0 +1,11 @@
+{
+  "name": "eternal-site",
+  "private": true,
+  "description": "(주) 이터널 사이트 + 관리자 페이지",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

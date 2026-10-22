@@ -504,6 +504,32 @@
     act(btn, async () => { await api(`api/admin/files/${btn.closest("[data-file]").dataset.file}/delete`, {}); await loadFiles(); });
   });
 
+  /* ---------- 백업 · 복원 ---------- */
+  $("#restore-btn").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    const file = $("#restore-file").files[0];
+    const note = $("#restore-note");
+    if (!file) return (note.textContent = "백업 파일을 고르세요.");
+    if (!btn.dataset.armed) {
+      btn.dataset.armed = "1";
+      note.textContent = "지금 데이터가 백업 내용으로 바뀝니다. 계속하려면 복원을 한 번 더 누르세요.";
+      setTimeout(() => delete btn.dataset.armed, 5000);
+      return;
+    }
+    delete btn.dataset.armed;
+    btn.disabled = true;
+    note.textContent = "복원 중…";
+    try {
+      const r = await upload("api/admin/restore", file);
+      const c = r.counts;
+      note.textContent = `복원 완료: 회원 ${c.users} · 크루 ${c.crews} · 채널 ${c.channels} · 시그 ${c.sigs} · 레슨 ${c.lessons}. 백업에 있던 관리자 계정으로 다시 로그인하세요.`;
+      setTimeout(() => location.reload(), 4000);
+    } catch (err) {
+      note.textContent = err.message;
+      btn.disabled = false;
+    }
+  });
+
   /* ---------- 유튜브 채널 ---------- */
   async function loadChannels() {
     const channels = await api("api/admin/channels");

@@ -143,3 +143,6 @@ a.lesson-title:hover { text-decoration: underline; }
   .sig-row .actions { justify-content: flex-start; flex-wrap: wrap; }
   .list-head .search { margin-left: 0; width: 100%; }
 }
+
+.backup-box { margin-top: 28px; }
+.backup-box .inline-form { align-items: flex-end; }
