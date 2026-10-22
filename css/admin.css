@@ -95,3 +95,6 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 1
   .channel-card .field, .channel-card .actions { grid-column: 1 / -1; }
   .channel-card .actions { justify-content: flex-start; }
 }
+
+.order-cell { white-space: nowrap; width: 1%; }
+.order-cell .mini-action + .mini-action { margin-left: 4px; }

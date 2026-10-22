@@ -7,37 +7,104 @@
   const REFRESH_MS = 60 * 1000;
 
   const site = { crews: [], members: [], user: null };
-  let activeCrew = "all";
   const crewName = (id) => site.crews.find((c) => c.id === id)?.name ?? "";
 
-  /* ---------- 메뉴 ---------- */
-  function renderNav() {
-    const items = [{ id: "all", name: "홈" }, ...site.crews];
-    const html = items
-      .map((c) => `<a href="#${c.id === "all" ? "home" : c.id}" data-crew="${c.id}" class="${c.id === activeCrew ? "is-active" : ""}">${esc(c.name)}</a>`)
-      .join("");
-    $("#desktop-nav").innerHTML = html;
-    $("#mobile-nav").innerHTML = html;
+  // 모든 크루 드롭다운에 공통으로 붙는 하위 메뉴
+  const PAGES = [
+    { id: "price", name: "전체 가격표" },
+    { id: "sigs", name: "시그목록" },
+    { id: "members", name: "멤버" },
+    { id: "live", name: "Live" },
+    { id: "posts", name: "게시글" },
+    { id: "shorts", name: "쇼츠" },
+    { id: "files", name: "파일 다운로드" },
+    { id: "newsig", name: "뉴시그·안무영상" },
+  ];
+  const pageHref = (crew, page) => `#crew/${encodeURIComponent(crew)}/${page}`;
+
+  /* ---------- 라우팅: #home, #crew/{크루id}/{메뉴} ---------- */
+  let current = { crew: null, page: "home" };
+
+  function parseRoute() {
+    const m = location.hash.match(/^#crew\/([^/]+)(?:\/([^/]+))?$/);
+    const crew = m && decodeURIComponent(m[1]);
+    if (!crew || !site.crews.some((c) => c.id === crew)) return { crew: null, page: "home" };
+    return { crew, page: PAGES.some((p) => p.id === m[2]) ? m[2] : PAGES[0].id };
   }
 
-  function setCrew(id) {
-    activeCrew = site.crews.some((c) => c.id === id) ? id : "all";
-    showHome();
+  function route() {
+    current = parseRoute();
     renderNav();
-    renderLive();
-    renderCrewSections();
-    sigPage = 1;
-    renderSigs();
+    closeDropdowns();
+    closeMobileNav();
+    const home = current.page === "home";
+    $("#home-view").hidden = !home;
+    $("#page-view").hidden = home;
+    if (home) {
+      renderLive();
+      renderCrewSections();
+      renderHomeSigs();
+    } else {
+      renderPage();
+    }
+    window.scrollTo({ top: 0 });
+  }
+  window.addEventListener("hashchange", route);
+
+  /* ---------- 상단 메뉴 (크루별 드롭다운) ---------- */
+  function navHtml(prefix) {
+    const homeLink = `<a href="#home" class="nav-link ${current.page === "home" ? "is-active" : ""}"><span class="nav-label">홈</span></a>`;
+    const crews = site.crews.map((c) => {
+      const active = c.id === current.crew;
+      const menuId = `${prefix}-dd-${c.id}`;
+      const items = PAGES.map((p) => {
+        const here = active && p.id === current.page;
+        return `<li><a href="${pageHref(c.id, p.id)}" class="${here ? "is-current" : ""}" ${here ? 'aria-current="page"' : ""}>${p.name}</a></li>`;
+      }).join("");
+      return `
+        <div class="nav-item ${active ? "is-active" : ""}">
+          <button type="button" class="nav-link dd-toggle" aria-expanded="false" aria-controls="${esc(menuId)}">
+            <span class="nav-label">${esc(c.name)}</span><span class="caret" aria-hidden="true">▼</span>
+          </button>
+          <ul class="dd-menu" id="${esc(menuId)}" hidden>${items}</ul>
+        </div>`;
+    }).join("");
+    return homeLink + crews;
   }
 
+  function renderNav() {
+    $("#desktop-nav").innerHTML = navHtml("d");
+    $("#mobile-menu").innerHTML = navHtml("m");
+  }
+
+  function closeDropdowns(except) {
+    $$(".dd-toggle[aria-expanded='true']").forEach((t) => {
+      if (t === except) return;
+      t.setAttribute("aria-expanded", "false");
+      $(`#${CSS.escape(t.getAttribute("aria-controls"))}`).hidden = true;
+    });
+  }
+
+  // 드롭다운: 누르면 열고, 다른 크루나 바깥을 누르면 닫음
   document.addEventListener("click", (e) => {
-    const link = e.target.closest("[data-crew]");
-    if (!link) return;
-    e.preventDefault();
-    history.replaceState(null, "", link.getAttribute("href"));
-    setCrew(link.dataset.crew);
-    closeMobileNav();
-    window.scrollTo({ top: 0, behavior: "smooth" });
+    const toggle = e.target.closest(".dd-toggle");
+    if (toggle) {
+      const open = toggle.getAttribute("aria-expanded") !== "true";
+      closeDropdowns(toggle);
+      toggle.setAttribute("aria-expanded", String(open));
+      $(`#${CSS.escape(toggle.getAttribute("aria-controls"))}`).hidden = !open;
+      return;
+    }
+    const menuItem = e.target.closest(".dd-menu a, .dd-menu button");
+    if (menuItem || !e.target.closest(".dd-menu")) closeDropdowns();
+    // 모바일 메뉴 안에서 이동하거나 창을 열면 메뉴를 접음
+    if (e.target.closest("#mobile-nav a, #mobile-nav [data-open]")) closeMobileNav();
+  });
+
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    const open = $(".dd-toggle[aria-expanded='true']");
+    if (open) { closeDropdowns(); open.focus(); }
   });
 
   const menuBtn = $("#menu-toggle");
@@ -56,15 +123,31 @@
   /* ---------- 로그인 상태 ---------- */
   function renderUser() {
     const u = site.user;
+    const myItems = [
+      `<button type="button" data-open="modal-backwall" data-need-login>백월 요청</button>`,
+      `<button type="button" data-open="modal-recommend" data-need-login>추천 노래</button>`,
+      u?.role === "admin" ? `<a href="admin.html">관리자 페이지</a>` : "",
+    ].filter(Boolean);
     $("#user-area").innerHTML = u
-      ? `<span class="user-name">${esc(u.nickname)}님</span>
-         ${u.role === "admin" ? '<a class="text-btn" href="admin.html">관리자</a>' : ""}
-         <button class="ghost-btn" type="button" id="logout-btn">로그아웃</button>`
+      ? `<div class="nav-item">
+           <button type="button" class="text-btn dd-toggle" aria-expanded="false" aria-controls="my-menu">내 메뉴 <span class="caret" aria-hidden="true">▼</span></button>
+           <ul class="dd-menu align-right" id="my-menu" hidden>
+             <li class="dd-head">${esc(u.nickname)}님</li>
+             ${myItems.map((i) => `<li>${i}</li>`).join("")}
+           </ul>
+         </div>
+         <button class="ghost-btn" type="button" data-logout>로그아웃</button>`
       : `<button class="primary-btn" type="button" data-open="modal-login">로그인</button>`;
+    $("#mobile-user").innerHTML = u
+      ? `<p class="mobile-user-name">${esc(u.nickname)}님</p>
+         ${myItems.join("")}
+         <button type="button" data-logout>로그아웃</button>`
+      : `<button class="primary-btn wide" type="button" data-open="modal-login">로그인</button>`;
   }
 
   document.addEventListener("click", async (e) => {
-    if (e.target.closest("#logout-btn")) {
+    if (e.target.closest("[data-logout]")) {
+      closeMobileNav();
       await api("api/auth/logout", {}).catch(() => {});
       site.user = null;
       renderUser();
@@ -171,25 +254,25 @@
 
   async function loadLive() {
     try { liveNow = (await api("api/live")).live ?? []; } catch { liveNow = []; }
-    renderLive();
+    if (current.page === "home") renderLive();
+    if (current.page === "live") renderPage();
   }
 
-  function renderLive() {
-    const crewLive = activeCrew === "all" ? liveNow : liveNow.filter((l) => l.crew === activeCrew);
-    $("#home-live").hidden = crewLive.length === 0;
-
-    const filters = [{ id: "all", name: "전체" }, ...site.crews.filter((c) => liveNow.some((l) => l.crew === c.id))];
-    if (!filters.some((f) => f.id === liveFilter)) liveFilter = "all";
-    $("#live-filter").innerHTML = activeCrew === "all" && filters.length > 2
-      ? filters.map((f) => `<button type="button" class="chip ${f.id === liveFilter ? "is-active" : ""}" data-live="${f.id}">${esc(f.name)}</button>`).join("")
-      : "";
-
-    const list = activeCrew === "all" && liveFilter !== "all" ? crewLive.filter((l) => l.crew === liveFilter) : crewLive;
-    $("#live-list").innerHTML = list.map((l) => `
+  const liveCard = (l) => `
       <a class="live-card" href="${esc(l.url)}" target="_blank" rel="noopener">
         <div class="thumb">${thumb(l.thumb, l.title)}<span class="badge-live">LIVE</span><span class="viewers">${(l.viewers || 0).toLocaleString()}명 시청</span></div>
         <div class="card-info"><strong>${esc(l.title)}</strong><span>${esc(l.member)}${l.crew ? ` · ${esc(crewName(l.crew))}` : ""}</span></div>
-      </a>`).join("");
+      </a>`;
+
+  function renderLive() {
+    $("#home-live").hidden = liveNow.length === 0;
+    const filters = [{ id: "all", name: "전체" }, ...site.crews.filter((c) => liveNow.some((l) => l.crew === c.id))];
+    if (!filters.some((f) => f.id === liveFilter)) liveFilter = "all";
+    $("#live-filter").innerHTML = filters.length > 2
+      ? filters.map((f) => `<button type="button" class="chip ${f.id === liveFilter ? "is-active" : ""}" data-live="${f.id}">${esc(f.name)}</button>`).join("")
+      : "";
+    const list = liveFilter === "all" ? liveNow : liveNow.filter((l) => l.crew === liveFilter);
+    $("#live-list").innerHTML = list.map(liveCard).join("");
   }
 
   $("#live-filter").addEventListener("click", (e) => {
@@ -203,8 +286,7 @@
   const TYPE_LABEL = { post: "게시글", short: "Shorts" };
 
   function renderCrewSections() {
-    const crews = activeCrew === "all" ? site.crews : site.crews.filter((c) => c.id === activeCrew);
-    const keys = ["post", "short"].flatMap((type) => crews.map((c) => ({ type, crew: c })));
+    const keys = ["post", "short"].flatMap((type) => site.crews.map((c) => ({ type, crew: c })));
     $("#crew-sections").innerHTML = keys.map(({ type, crew }) => {
       const key = `${type}-${crew.id}`;
       const title = `${esc(crew.name)} ${TYPE_LABEL[type]}`;
@@ -213,7 +295,7 @@
           <div class="panel-head">
             <h2 id="${key}-title">${title}</h2>
             <div class="head-tools">
-              <button type="button" class="ghost-btn" data-list="${type}" data-list-crew="${crew.id}">전체보기</button>
+              <a class="ghost-btn" href="${pageHref(crew.id, type === "short" ? "shorts" : "posts")}">전체보기</a>
               <nav class="arrows" aria-label="${title} 넘기기">
                 <button type="button" data-slide="${key}" data-dir="-1" aria-label="이전">‹</button>
                 <button type="button" data-slide="${key}" data-dir="1" aria-label="다음">›</button>
@@ -244,46 +326,85 @@
     slider.scrollBy({ left: slider.clientWidth * 0.9 * Number(btn.dataset.dir), behavior: "smooth" });
   });
 
-  /* ---------- 전체보기 ---------- */
+  /* ---------- 크루 페이지 ---------- */
   const list = { type: "post", crew: "", before: null };
 
-  function showHome() {
-    $("#home-view").hidden = false;
-    $("#list-view").hidden = true;
-  }
+  function renderPage() {
+    const { crew, page } = current;
+    const title = PAGES.find((p) => p.id === page).name;
+    $("#page-crumb").textContent = crewName(crew);
+    $("#page-title").textContent = title;
+    $("#page-tools").innerHTML = "";
+    $("#list-more").hidden = true;
+    $("#page-tabs").innerHTML = PAGES.map((p) =>
+      `<a href="${pageHref(crew, p.id)}" class="${p.id === page ? "is-current" : ""}" ${p.id === page ? 'aria-current="page"' : ""}>${p.name}</a>`).join("");
+    const body = $("#page-body");
+    const crewSigs = () => sigs.filter((s) => s.crew === crew);
 
-  async function openList(type, crew) {
-    Object.assign(list, { type, crew, before: null });
-    $("#list-title").textContent = `${crewName(crew)} ${TYPE_LABEL[type]}`;
-    $("#list-grid").className = `video-grid ${type === "short" ? "is-shorts" : ""}`;
-    $("#list-grid").innerHTML = "";
-    $("#home-view").hidden = true;
-    $("#list-view").hidden = false;
-    window.scrollTo({ top: 0 });
-    await loadMore();
+    if (page === "price") {
+      $("#page-tools").innerHTML = `<label class="search"><span class="sr-only">시그 검색</span><input type="search" placeholder="시그 이름 · 가격 검색"></label>`;
+      body.innerHTML = `
+        <div class="table-wrap"><table class="sig-table">
+          <thead><tr><th>시그</th><th>크루</th><th class="num">가격</th><th>등록일</th><th class="center">미리듣기</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <nav class="pagination" aria-label="가격표 페이지"></nav>`;
+      sigTable({ search: $("#page-tools input"), body: $("tbody", body), pager: $(".pagination", body), rows: crewSigs });
+    } else if (page === "sigs") {
+      const rows = crewSigs().sort((a, b) => (a.price || 0) - (b.price || 0) || a.name.localeCompare(b.name));
+      body.innerHTML = rows.length
+        ? `<ul class="sig-grid">${rows.map((s) => `
+            <li class="sig-item">
+              <span class="sig-name">${esc(s.name)} ${isNew(s.date) ? '<span class="badge-new">NEW</span>' : ""}</span>
+              <span class="sig-price">${Number(s.price || 0).toLocaleString()}</span>
+              <button type="button" class="mini-btn" data-sig="${sigs.indexOf(s)}" ${s.audio ? "" : "disabled"} aria-label="${esc(s.name)} 미리듣기">▶</button>
+            </li>`).join("")}</ul>`
+        : empty("등록된 시그가 없습니다.");
+    } else if (page === "members") {
+      const members = site.members.filter((m) => m.crew === crew);
+      body.innerHTML = members.length
+        ? `<div class="member-grid">${members.map((m) => `
+            <a class="member-card" href="https://www.youtube.com/${m.handle ? esc(m.handle) : `channel/${esc(m.id)}`}" target="_blank" rel="noopener">
+              ${m.thumb ? `<img src="${esc(m.thumb)}" alt="" loading="lazy">` : `<span class="member-avatar" aria-hidden="true"></span>`}
+              ${m.is_live ? '<span class="badge-live">LIVE</span>' : ""}
+              <strong>${esc(m.name)}</strong>
+            </a>`).join("")}</div>`
+        : empty("등록된 멤버가 없습니다. 관리자 페이지의 유튜브 채널에서 이 크루로 채널을 추가하세요.");
+    } else if (page === "live") {
+      const lives = liveNow.filter((l) => l.crew === crew);
+      body.innerHTML = lives.length ? `<div class="live-grid">${lives.map(liveCard).join("")}</div>` : empty("지금 방송 중인 멤버가 없습니다.");
+    } else if (page === "posts" || page === "shorts") {
+      Object.assign(list, { type: page === "shorts" ? "short" : "post", crew, before: null });
+      body.innerHTML = `<div class="video-grid ${page === "shorts" ? "is-shorts" : ""}" id="list-grid"></div>`;
+      loadMore();
+    } else if (page === "files") {
+      body.innerHTML = empty("아직 등록된 파일이 없습니다.");
+    } else if (page === "newsig") {
+      body.innerHTML = empty("아직 등록된 뉴시그·안무영상이 없습니다.");
+    }
   }
 
   async function loadMore() {
     const btn = $("#list-more");
+    const grid = $("#list-grid");
+    const req = { ...list };
     btn.disabled = true;
     try {
-      const q = new URLSearchParams({ type: list.type, crew: list.crew, limit: LIST_COUNT, ...(list.before ? { before: list.before } : {}) });
+      const q = new URLSearchParams({ type: req.type, crew: req.crew, limit: LIST_COUNT, ...(req.before ? { before: req.before } : {}) });
       const { items, more } = await api(`api/videos?${q}`);
-      $("#list-grid").insertAdjacentHTML("beforeend", items.map(videoCard).join(""));
-      if (!list.before && !items.length) $("#list-grid").innerHTML = empty("아직 올라온 영상이 없습니다.");
+      if (grid !== $("#list-grid")) return; // 그새 다른 페이지로 이동함
+      grid.insertAdjacentHTML("beforeend", items.map(videoCard).join(""));
+      if (!req.before && !items.length) grid.innerHTML = empty("아직 올라온 영상이 없습니다.");
       list.before = items.at(-1)?.published_at ?? list.before;
       btn.hidden = !more;
+    } catch {
+      if (grid === $("#list-grid") && !req.before) grid.innerHTML = empty("불러오지 못했습니다.");
     } finally {
       btn.disabled = false;
     }
   }
 
-  document.addEventListener("click", (e) => {
-    const b = e.target.closest("[data-list]");
-    if (b) openList(b.dataset.list, b.dataset.listCrew);
-  });
   $("#list-more").addEventListener("click", loadMore);
-  $("#list-back").addEventListener("click", () => { showHome(); window.scrollTo({ top: 0 }); });
 
   /* ---------- 자세히 보기 ---------- */
   const detail = $("#modal-detail");
@@ -314,41 +435,47 @@
   detail.addEventListener("close", () => { $("#detail-player").innerHTML = ""; });
 
   /* ---------- 시그 가격표 ---------- */
-  let sigPage = 1;
-  let sigQuery = "";
   const isNew = (date) => date && (Date.now() - new Date(date).getTime()) / 864e5 <= NEW_DAYS;
 
-  function renderSigs() {
-    const q = sigQuery.trim().toLowerCase();
-    const rows = (activeCrew === "all" ? sigs : sigs.filter((s) => s.crew === activeCrew))
-      .filter((s) => !q || s.name.toLowerCase().includes(q) || String(s.price).includes(q))
-      .sort((a, b) => String(b.date).localeCompare(String(a.date)));
-    const pages = Math.max(1, Math.ceil(rows.length / PAGE_SIZE));
-    sigPage = Math.min(sigPage, pages);
-    const page = rows.slice((sigPage - 1) * PAGE_SIZE, sigPage * PAGE_SIZE);
+  // 검색 + 페이지 나누기가 있는 시그 표 (홈의 "새로 들어온 시그", 크루별 "전체 가격표")
+  function sigTable({ search, body, pager, rows }) {
+    let page = 1;
+    const render = () => {
+      const q = search.value.trim().toLowerCase();
+      const list = rows()
+        .filter((s) => !q || s.name.toLowerCase().includes(q) || String(s.price).includes(q))
+        .sort((a, b) => String(b.date).localeCompare(String(a.date)));
+      const pages = Math.max(1, Math.ceil(list.length / PAGE_SIZE));
+      page = Math.min(page, pages);
+      const shown = list.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
-    $("#sig-list").innerHTML = page.length
-      ? page.map((s) => `
-        <tr>
-          <td>${esc(s.name)} ${isNew(s.date) ? '<span class="badge-new">NEW</span>' : ""}</td>
-          <td>${esc(crewName(s.crew))}</td>
-          <td class="num">${Number(s.price || 0).toLocaleString()}</td>
-          <td>${esc(s.date || "")}</td>
-          <td class="center"><button type="button" class="mini-btn" data-sig="${sigs.indexOf(s)}" ${s.audio ? "" : "disabled"} aria-label="미리듣기">▶</button></td>
-        </tr>`).join("")
-      : `<tr><td colspan="5">${empty(q ? "검색 결과가 없습니다." : "등록된 시그가 없습니다.")}</td></tr>`;
+      body.innerHTML = shown.length
+        ? shown.map((s) => `
+          <tr>
+            <td>${esc(s.name)} ${isNew(s.date) ? '<span class="badge-new">NEW</span>' : ""}</td>
+            <td>${esc(crewName(s.crew))}</td>
+            <td class="num">${Number(s.price || 0).toLocaleString()}</td>
+            <td>${esc(s.date || "")}</td>
+            <td class="center"><button type="button" class="mini-btn" data-sig="${sigs.indexOf(s)}" ${s.audio ? "" : "disabled"} aria-label="미리듣기">▶</button></td>
+          </tr>`).join("")
+        : `<tr><td colspan="5">${empty(q ? "검색 결과가 없습니다." : "등록된 시그가 없습니다.")}</td></tr>`;
 
-    $("#sig-pages").innerHTML = pages > 1
-      ? Array.from({ length: pages }, (_, i) => `<button type="button" data-page="${i + 1}" class="${i + 1 === sigPage ? "is-active" : ""}">${i + 1}</button>`).join("")
-      : "";
+      pager.innerHTML = pages > 1
+        ? Array.from({ length: pages }, (_, i) => `<button type="button" data-page="${i + 1}" class="${i + 1 === page ? "is-active" : ""}">${i + 1}</button>`).join("")
+        : "";
+    };
+    search.addEventListener("input", () => { page = 1; render(); });
+    pager.addEventListener("click", (e) => {
+      const b = e.target.closest("[data-page]");
+      if (b) { page = Number(b.dataset.page); render(); }
+    });
+    render();
+    return render;
   }
 
-  $("#sig-search").addEventListener("input", (e) => { sigQuery = e.target.value; sigPage = 1; renderSigs(); });
-  $("#sig-pages").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-page]");
-    if (b) { sigPage = Number(b.dataset.page); renderSigs(); }
-  });
-  $("#sig-list").addEventListener("click", (e) => {
+  let renderHomeSigs = () => {};
+
+  document.addEventListener("click", (e) => {
     const b = e.target.closest("[data-sig]");
     if (!b) return;
     const s = sigs[Number(b.dataset.sig)];
@@ -369,10 +496,11 @@
 
   $("#year").textContent = new Date().getFullYear();
   loadSite().then(() => {
-    setCrew(location.hash.slice(1));
+    renderHomeSigs = sigTable({ search: $("#sig-search"), body: $("#sig-list"), pager: $("#sig-pages"), rows: () => sigs });
+    route();
     loadLive();
     setInterval(loadLive, REFRESH_MS);
-    // 새 영상 반영 (전체보기 화면에서는 갱신하지 않음)
-    setInterval(() => { if (!$("#home-view").hidden) loadSliders(); }, REFRESH_MS * 5);
+    // 새 영상 반영 (홈 화면에서만)
+    setInterval(() => { if (current.page === "home") loadSliders(); }, REFRESH_MS * 5);
   });
 })();

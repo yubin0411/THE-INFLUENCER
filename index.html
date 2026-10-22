@@ -20,7 +20,7 @@
 
   <header class="site-header">
     <div class="header-inner">
-      <a class="logo" href="#home" data-crew="all">
+      <a class="logo" href="#home">
         <span class="logo-mark">E</span>
         <span class="logo-text">(주) 이터널</span>
       </a>
@@ -31,17 +31,18 @@
         <button class="icon-btn" id="theme-toggle" type="button" aria-label="테마 변경">
           <span class="theme-label">White</span>
         </button>
-        <button class="text-btn" type="button" data-open="modal-backwall" data-need-login>백월 요청</button>
-        <button class="text-btn" type="button" data-open="modal-recommend" data-need-login>추천 노래</button>
         <div class="user-area" id="user-area">
           <button class="primary-btn" type="button" data-open="modal-login">로그인</button>
         </div>
-        <button class="icon-btn menu-btn" id="menu-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false">
+        <button class="icon-btn menu-btn" id="menu-toggle" type="button" aria-label="메뉴 열기" aria-expanded="false" aria-controls="mobile-nav">
           <span></span><span></span><span></span>
         </button>
       </div>
     </div>
-    <nav class="mobile-nav" id="mobile-nav" aria-label="모바일 메뉴" hidden></nav>
+    <div class="mobile-nav" id="mobile-nav" hidden>
+      <nav id="mobile-menu" aria-label="모바일 메뉴"></nav>
+      <div class="mobile-user" id="mobile-user"></div>
+    </div>
   </header>
 
   <main id="main" class="main">
@@ -81,13 +82,17 @@
       </section>
     </div>
 
-    <!-- 전체보기 -->
-    <section class="panel" id="list-view" hidden aria-labelledby="list-title">
+    <!-- 크루별 페이지 (#crew/{크루id}/{메뉴}) -->
+    <section class="panel" id="page-view" hidden aria-labelledby="page-title">
       <div class="panel-head">
-        <h2 id="list-title"></h2>
-        <button type="button" class="ghost-btn" id="list-back">← 홈으로</button>
+        <div>
+          <p class="crumb" id="page-crumb"></p>
+          <h2 id="page-title"></h2>
+        </div>
+        <div class="head-tools" id="page-tools"></div>
       </div>
-      <div class="video-grid" id="list-grid"></div>
+      <nav class="sub-tabs" id="page-tabs" aria-label="크루 메뉴"></nav>
+      <div id="page-body"></div>
       <div class="more-wrap"><button type="button" class="ghost-btn" id="list-more" hidden>더 보기</button></div>
     </section>
   </main>

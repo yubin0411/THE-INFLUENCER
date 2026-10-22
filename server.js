@@ -10,7 +10,7 @@ const crypto = require("crypto");
 
 loadEnv();
 
-const { db, DATA_DIR } = require("./lib/db");
+const { db, tx, DATA_DIR } = require("./lib/db");
 const auth = require("./lib/auth");
 const youtube = require("./lib/youtube");
 
@@ -84,7 +84,9 @@ const route = (method, pattern, handler) => {
 // 사이트 기본 정보
 route("GET", "/api/site", (req) => ({
   crews: db.prepare("SELECT id, name FROM crews ORDER BY sort, name").all(),
-  members: db.prepare("SELECT COALESCE(NULLIF(name, ''), title) AS name, crew_id AS crew FROM channels ORDER BY name").all(),
+  members: db.prepare(`SELECT c.id, COALESCE(NULLIF(c.name, ''), c.title) AS name, c.crew_id AS crew, c.thumb, c.handle,
+    EXISTS (SELECT 1 FROM videos v WHERE v.channel_id = c.id AND v.live = 'live') AS is_live
+    FROM channels c ORDER BY name`).all(),
   user: auth.currentUser(req),
 }));
 
@@ -241,8 +243,26 @@ route("POST", "/api/admin/crews", async (req) => {
   const name = str(b.name, 30) || fail(400, "크루 이름을 입력하세요.");
   const id = str(b.id, 30) || `crew-${crypto.randomBytes(3).toString("hex")}`;
   if (!/^[a-z0-9-]+$/.test(id)) fail(400, "크루 ID는 영문 소문자/숫자/- 만 가능합니다.");
+  const sort = b.sort === undefined || b.sort === ""
+    ? db.prepare("SELECT sort FROM crews WHERE id = ?").get(id)?.sort ?? (db.prepare("SELECT MAX(sort) AS m FROM crews").get().m ?? 0) + 1
+    : Number(b.sort) || 0;
   db.prepare("INSERT INTO crews (id, name, sort) VALUES (?, ?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name, sort = excluded.sort")
-    .run(id, name, Number(b.sort) || 0);
+    .run(id, name, sort);
+  return { ok: true };
+});
+
+// 순서 변경: 바로 앞/뒤 크루와 자리 바꾸기
+route("POST", "/api/admin/crews/:id/move", async (req, p) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  const ids = db.prepare("SELECT id FROM crews ORDER BY sort, name").all().map((c) => c.id);
+  const i = ids.indexOf(p.id);
+  if (i < 0) fail(404, "크루를 찾을 수 없습니다.");
+  const j = i + (Number(b.dir) < 0 ? -1 : 1);
+  if (j < 0 || j >= ids.length) return { ok: true };
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  const set = db.prepare("UPDATE crews SET sort = ? WHERE id = ?");
+  tx(() => ids.forEach((id, n) => set.run(n + 1, id)));
   return { ok: true };
 });
 

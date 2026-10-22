@@ -157,13 +157,16 @@
     crews = await api("api/admin/crews");
     $$(".crew-select").forEach((s) => (s.innerHTML = crewOptions(s.value)));
     $("#crew-list").innerHTML = crews.length
-      ? crews.map((c) => `
+      ? crews.map((c, i) => `
         <tr data-crew-row="${esc(c.id)}">
-          <td><input class="cell-input" name="name" value="${esc(c.name)}" maxlength="30"></td>
-          <td><input class="cell-input small" name="sort" type="number" value="${c.sort}"></td>
+          <td class="order-cell">
+            <button type="button" class="mini-action" data-move="-1" aria-label="위로" ${i === 0 ? "disabled" : ""}>▲</button>
+            <button type="button" class="mini-action" data-move="1" aria-label="아래로" ${i === crews.length - 1 ? "disabled" : ""}>▼</button>
+          </td>
+          <td><input class="cell-input" name="name" value="${esc(c.name)}" maxlength="30" aria-label="크루 이름"></td>
           <td><code>${esc(c.id)}</code></td>
           <td class="right actions">
-            <button type="button" class="mini-action ok" data-save>저장</button>
+            <button type="button" class="mini-action ok" data-save>이름 저장</button>
             <button type="button" class="mini-action danger" data-delete>삭제</button>
           </td>
         </tr>`).join("")
@@ -191,8 +194,11 @@
       if (!confirmClick(btn)) return;
       return act(btn, async () => { await api(`api/admin/crews/${encodeURIComponent(id)}/delete`, {}); await Promise.all([loadCrews(), loadChannels()]); });
     }
+    if (btn.dataset.move) {
+      return act(btn, async () => { await api(`api/admin/crews/${encodeURIComponent(id)}/move`, { dir: Number(btn.dataset.move) }); await loadCrews(); });
+    }
     act(btn, async () => {
-      await api("api/admin/crews", { id, name: $('[name="name"]', row).value, sort: $('[name="sort"]', row).value });
+      await api("api/admin/crews", { id, name: $('[name="name"]', row).value });
       $("#crew-note").textContent = "저장했습니다.";
       await Promise.all([loadCrews(), loadChannels()]);
     });
