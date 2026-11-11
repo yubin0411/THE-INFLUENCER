@@ -111,9 +111,7 @@ function publicMembers() {
       sig_ids: JSON.parse(r.sig_ids || "[]"),
       is_live: m.is_live, yt_live: m.yt_live, soop_live: m.soop_live,
       // 방송 보러 가기 (SOOP 우선, 없으면 유튜브 라이브)
-      live_url: m.soop_live ? `https://play.sooplive.co.kr/${m.soop_station}/${m.soop_broad}`
-        : m.yt_live_id ? `https://www.youtube.com/watch?v=${m.yt_live_id}` : null,
-      live_platform: m.soop_live ? "soop" : m.yt_live ? "youtube" : null,
+      live_url: m.live_url, live_platform: m.live_platform, live_viewers: m.live_viewers,
     };
   });
 }
@@ -130,11 +128,31 @@ route("GET", "/api/live", () => {
   return { live: [...yt, ...sp].sort((a, b) => b.viewers - a.viewers) };
 });
 
-// 방송 시간 순위 (달별, 기본 이번 달)
+// 라이브 시간 랭킹
+//   period = today | yesterday | week | 30d(기본) | YYYY-MM | custom(&from=YYYY-MM-DD&to=YYYY-MM-DD)
+//   platform = all | soop | youtube, category = all | game | talk | …, sort = time | peak | viewers | followers
+//   crew = 크루 ID (주면 그 크루 멤버와 크루 없는 멤버만)
+const rankQuery = (url) => {
+  const q = Object.fromEntries(["period", "from", "to", "platform", "category", "sort"].map((k) => [k, url.searchParams.get(k) || undefined]));
+  const crew = url.searchParams.get("crew");
+  if (crew) q.members = new Set(db.prepare("SELECT id FROM members WHERE crew_id IS NULL OR crew_id = ?").all(crew).map((r) => String(r.id)));
+  return q;
+};
 route("GET", "/api/ranking", (req, _p, url) => {
-  const month = url.searchParams.get("month");
-  return { ...broadcasts.monthStats(broadcasts.isMonth(month) ? month : undefined), months: broadcasts.months() };
+  const q = rankQuery(url);
+  // 관리자 페이지(달별 방송 시간): month= 로 부르면 그 달 (비어 있으면 이번 달)
+  if (url.searchParams.has("month")) {
+    const month = broadcasts.isMonth(url.searchParams.get("month")) ? url.searchParams.get("month") : broadcasts.monthKey();
+    return { ...broadcasts.ranking({ ...q, period: month }), month, current: month === broadcasts.monthKey() };
+  }
+  return broadcasts.ranking(q);
 });
+// 후원자 랭킹 (전체, member= 를 주면 그 멤버가 받은 것만)
+route("GET", "/api/donors", (req, _p, url) => broadcasts.donorRanking({ ...rankQuery(url), member: url.searchParams.get("member") || undefined }));
+// 후원자 1명 자세히 (key = 플랫폼:아이디)
+route("GET", "/api/donors/:key", (req, p, url) => broadcasts.donorDetail(String(p.key), rankQuery(url)) || fail(404, "후원 기록을 찾을 수 없습니다."));
+// 멤버 1명 자세히 (그래프 · 방송 일정 · 기록 · 활동)
+route("GET", "/api/ranking/member/:id", (req, p, url) => broadcasts.memberDetail(String(p.id), rankQuery(url)) || fail(404, "멤버를 찾을 수 없습니다."));
 // 한 멤버의 그 달 방송 목록
 route("GET", "/api/ranking/sessions", (req, _p, url) => {
   const month = url.searchParams.get("month");

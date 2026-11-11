@@ -49,13 +49,14 @@
     <h1 class="sr-only">(주) 이터널 통합 홈</h1>
 
     <div id="home-view" class="view">
-      <!-- 이번 달 개인방송 시간 순위 (유튜브 라이브 + SOOP) — 홈 맨 위 -->
-      <section class="panel rank-panel" id="home-rank" aria-labelledby="rank-title">
-        <div class="panel-head">
-          <h2 id="rank-title">방송 시간 순위 <span class="head-note" id="rank-note"></span></h2>
-          <button type="button" class="ghost-btn" data-rank-open>자세히 보기</button>
+      <!-- 실시간 라이브 시간 랭킹 (홈 맨 위) -->
+      <section class="rank-home" id="home-rank" aria-labelledby="rank-title">
+        <div class="section-title">
+          <h2 id="rank-title">실시간 라이브 시간 랭킹</h2>
+          <p class="prize-note">🏆 매달 라이브 시간 <b>1~3위</b> 방송자에게 <b>상금</b>을 드려요</p>
         </div>
-        <ol class="podium" id="rank-podium"></ol>
+        <div class="chips pf-tabs" id="home-rank-pf" role="tablist" aria-label="플랫폼"></div>
+        <div class="rank-cards" id="home-rank-cards"></div>
       </section>
 
       <!-- 라이브: 유튜브 + SOOP 같이 -->
@@ -126,6 +127,9 @@
         <nav class="pagination" id="sig-pages" aria-label="시그 목록 페이지"></nav>
       </section>
     </div>
+
+    <!-- 라이브 시간 랭킹 (#ranking) · 멤버 자세히 (#ranking/{멤버}) -->
+    <div class="view rank-view" id="rank-view" hidden></div>
 
     <!-- 크루별 페이지 (#crew/{크루id}/{메뉴}) -->
     <section class="panel" id="page-view" hidden aria-labelledby="page-title">
@@ -218,26 +222,6 @@
       <header class="mp-head" id="mp-head"></header>
       <nav class="tabs mp-tabs" id="mp-tabs" role="tablist"></nav>
       <div class="mp-body" id="mp-body"></div>
-    </div>
-  </dialog>
-
-  <!-- 방송 시간 순위 자세히 -->
-  <dialog class="modal modal-media" id="modal-rank" aria-labelledby="rank-modal-title">
-    <div class="modal-body">
-      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
-      <div class="rank-modal-head">
-        <h2 id="rank-modal-title">방송 시간 순위</h2>
-        <label class="select"><span class="sr-only">달 선택</span><select id="rank-month"></select></label>
-      </div>
-      <p class="hint" id="rank-summary"></p>
-      <div class="chips" id="rank-crew"></div>
-      <div class="table-wrap">
-        <table class="sig-table rank-table">
-          <thead><tr><th class="center">순위</th><th>멤버</th><th class="num">방송 시간</th><th class="num">방송일</th><th class="num">횟수</th><th class="center">상태</th></tr></thead>
-          <tbody id="rank-list"></tbody>
-        </table>
-      </div>
-      <p class="hint">유튜브 라이브와 SOOP 방송을 1분마다 자동으로 확인해서 기록합니다. 두 곳에서 동시에 방송한 시간은 한 번만 셉니다. 멤버를 누르면 그 달 방송 목록을 볼 수 있어요.</p>
     </div>
   </dialog>
 

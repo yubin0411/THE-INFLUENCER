@@ -865,7 +865,7 @@
     const sel = $("#bc-month");
     month = month || sel.value || "";
     try {
-      bc = await api(`api/ranking${month ? `?month=${month}` : ""}`);
+      bc = await api(`api/ranking?month=${month || ""}`);
     } catch (err) {
       $("#bc-note").textContent = err.message;
       return;
@@ -924,6 +924,50 @@
     const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `방송시간_${bc.month}.csv` });
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
+
+  // 전체 방송자 · 전체 달을 엑셀 파일 하나로
+  //   시트 1 "월별 정리": 멤버 × 달 (방송 시간, 시간 단위 숫자) + 합계
+  //   시트 2~ "YYYY-MM": 그 달 순위 · 방송 시간 · 방송일 · 횟수 · 최고/평균 시청자
+  $("#bc-xlsx").addEventListener("click", async (e) => {
+    const btn = e.currentTarget;
+    if (!window.XLSX) return ($("#bc-note").textContent = "엑셀 도구를 불러오지 못했습니다. 새로고침 후 다시 시도하세요.");
+    btn.disabled = true;
+    const note = $("#bc-note");
+    try {
+      const months = (bc?.months || (await api("api/ranking?month=")).months).slice().reverse(); // 오래된 달 → 최근 달
+      const data = [];
+      for (const [i, m] of months.entries()) {
+        note.textContent = `엑셀 만드는 중… (${i + 1}/${months.length})`;
+        data.push(await api(`api/ranking?month=${m}`));
+      }
+      const hours = (sec) => Math.round((sec / 3600) * 100) / 100;
+      const people = new Map();
+      for (const d of data) for (const it of d.items) if (!people.has(it.id)) people.set(it.id, it);
+      const summary = [["멤버", "크루", "유튜브", "SOOP", ...months.map((m) => `${monthLabel(m)} (시간)`), "합계 (시간)"]];
+      for (const p of people.values()) {
+        const per = data.map((d) => d.items.find((x) => x.id === p.id)?.seconds || 0);
+        summary.push([p.name, crewLabel(p.crew), p.youtube || "", p.soop || "", ...per.map(hours), hours(per.reduce((a, b) => a + b, 0))]);
+      }
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.aoa_to_sheet(summary);
+      ws["!cols"] = [{ wch: 14 }, { wch: 12 }, { wch: 26 }, { wch: 14 }, ...months.map(() => ({ wch: 16 })), { wch: 12 }];
+      XLSX.utils.book_append_sheet(wb, ws, "월별 정리");
+      for (const [i, d] of data.entries()) {
+        const rows = [["순위", "멤버", "크루", "유튜브", "SOOP", "방송 시간 (시간)", "방송 시간", "방송일", "방송 횟수", "최고 시청자", "평균 시청자", "받은 별풍선", "후원자 수"]]
+          .concat(d.items.map((it) => [it.rank ?? "", it.name, crewLabel(it.crew), it.youtube || "", it.soop || "",
+            hours(it.seconds), fmtHours(it.seconds), it.days, it.sessions, it.peak || "", it.avg || "", it.donation || 0, it.donors || 0]));
+        const sh = XLSX.utils.aoa_to_sheet(rows);
+        sh["!cols"] = [{ wch: 6 }, { wch: 14 }, { wch: 12 }, { wch: 26 }, { wch: 14 }, { wch: 14 }, { wch: 14 }, { wch: 8 }, { wch: 9 }, { wch: 11 }, { wch: 11 }, { wch: 11 }, { wch: 9 }];
+        XLSX.utils.book_append_sheet(wb, sh, months[i]);
+      }
+      XLSX.writeFile(wb, `방송시간_월별_${months[0]}~${months.at(-1)}.xlsx`);
+      note.textContent = `엑셀을 받았어요: ${months.length}개월 · 방송자 ${people.size}명`;
+    } catch (err) {
+      note.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
   });
 
   /* ---------- 요청함 ---------- */
