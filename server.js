@@ -110,6 +110,10 @@ function publicMembers() {
       promise_text: r.promise_text, promise_image: broadcasts.photoUrl(r.promise_image),
       sig_ids: JSON.parse(r.sig_ids || "[]"),
       is_live: m.is_live, yt_live: m.yt_live, soop_live: m.soop_live,
+      // 방송 보러 가기 (SOOP 우선, 없으면 유튜브 라이브)
+      live_url: m.soop_live ? `https://play.sooplive.co.kr/${m.soop_station}/${m.soop_broad}`
+        : m.yt_live_id ? `https://www.youtube.com/watch?v=${m.yt_live_id}` : null,
+      live_platform: m.soop_live ? "soop" : m.yt_live ? "youtube" : null,
     };
   });
 }
@@ -164,6 +168,42 @@ route("GET", "/api/videos", (req, _p, url) => {
         ORDER BY v.published_at DESC LIMIT ?
       `).all(...args, before, limit + 1);
   return { items: rows.slice(0, limit).map(({ rn, ...v }) => v), more: rows.length > limit };
+});
+
+// SOOP 글 · VOD 공통
+const soopFrom = "soop_posts p JOIN soop_channels sc ON sc.id = p.station_id LEFT JOIN members mb ON mb.id = sc.member_id";
+const soopItem = (r) => ({
+  id: `soop-${r.id}`, platform: "soop", kind: r.kind, title: r.title, summary: r.summary, thumb: r.thumb,
+  duration: r.duration, views: r.views, is_notice: !!r.is_notice, at: r.posted_at,
+  member: r.member || r.nick || r.station_id, member_id: r.member_id == null ? null : String(r.member_id), crew: r.crew,
+  url: r.kind === "vod" ? `https://vod.sooplive.com/player/${r.id}` : `https://www.sooplive.com/station/${r.station_id}/post/${r.id}`,
+});
+const soopFields = "p.*, sc.nick, mb.name AS member, mb.id AS member_id, mb.crew_id AS crew";
+
+// 공지: SOOP 방송국 글 + 유튜브 새 영상을 시간순으로 (before 로 더 불러오기)
+route("GET", "/api/notices", (req, _p, url) => {
+  const member = Number(url.searchParams.get("member")) || null;
+  const before = Number(url.searchParams.get("before")) || Number.MAX_SAFE_INTEGER;
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 60);
+  const sp = db.prepare(`SELECT ${soopFields} FROM ${soopFrom} WHERE p.kind = 'post' AND p.posted_at < ? ${member ? "AND mb.id = ?" : ""}
+    ORDER BY p.posted_at DESC LIMIT ?`).all(...[before, member, limit + 1].filter((x) => x !== null)).map(soopItem);
+  const yt = db.prepare(`SELECT ${videoFields} FROM ${videoFrom} WHERE v.type = 'post' AND v.live = 'none' AND v.published_at < ? ${member ? "AND c.member_id = ?" : ""}
+    ORDER BY v.published_at DESC LIMIT ?`).all(...[before, member, limit + 1].filter((x) => x !== null))
+    .map((v) => ({ id: v.id, platform: "youtube", kind: "video", title: v.title, summary: "", thumb: v.thumb, duration: v.duration,
+      views: v.views, is_notice: false, at: v.published_at, member: v.member, member_id: v.member_id == null ? null : String(v.member_id), crew: v.crew,
+      url: `https://www.youtube.com/watch?v=${v.id}` }));
+  const all = [...sp, ...yt].sort((a, b) => b.at - a.at);
+  return { items: all.slice(0, limit), more: all.length > limit };
+});
+
+// SOOP 다시보기 VOD
+route("GET", "/api/vods", (req, _p, url) => {
+  const member = Number(url.searchParams.get("member")) || null;
+  const before = Number(url.searchParams.get("before")) || Number.MAX_SAFE_INTEGER;
+  const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 60);
+  const rows = db.prepare(`SELECT ${soopFields} FROM ${soopFrom} WHERE p.kind = 'vod' AND p.posted_at < ? ${member ? "AND mb.id = ?" : ""}
+    ORDER BY p.posted_at DESC LIMIT ?`).all(...[before, member, limit + 1].filter((x) => x !== null));
+  return { items: rows.slice(0, limit).map(soopItem), more: rows.length > limit };
 });
 
 // 자세히 보기
@@ -473,11 +513,13 @@ route("POST", "/api/admin/members/:id/soop", async (req, p) => {
   if (owner) fail(409, `이미 등록된 방송국입니다: ${st.nick || st.id}${owner.name ? ` (${owner.name})` : ""}`);
   db.prepare("INSERT INTO soop_channels (id, nick, thumb, member_id, created_at) VALUES (?, ?, ?, ?, ?)").run(st.id, st.nick, st.thumb, m.id, Date.now());
   await soop.check(st.id).catch(() => {});
+  await soop.posts(st.id).catch(() => {});
   return { ok: true, message: `${st.nick || st.id} 연결 완료${st.live ? " (지금 방송 중)" : ""}` };
 });
 route("POST", "/api/admin/soop/:id/delete", (req, p) => {
   requireAdmin(req);
   db.prepare("DELETE FROM soop_channels WHERE id = ?").run(p.id);
+  db.prepare("DELETE FROM soop_posts WHERE station_id = ?").run(p.id);
   return { ok: true };
 });
 

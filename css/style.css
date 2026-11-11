@@ -588,3 +588,67 @@ a:hover .thumb img, button:hover .thumb img { transform: scale(1.04); }
   .sig-files { grid-template-columns: minmax(0, 1fr); }
   .sig-image-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 }
+
+/* ---------- 한 크루용 메뉴 · 플랫폼 로고 · 공지 · VOD ---------- */
+.desktop-nav { overflow-x: auto; scrollbar-width: none; }
+.desktop-nav::-webkit-scrollbar { display: none; }
+.desktop-nav .nav-link { padding: 0 11px; font-size: 14.5px; }
+.desktop-nav .nav-link::after { left: 9px; right: 9px; }
+
+.pf-logos { display: inline-flex; align-items: center; gap: 5px; }
+.pf-logo { flex: none; display: inline-block; vertical-align: middle; }
+svg.pf-logo { width: 24px; height: 17px; }
+.pf-logo.soop {
+  height: 17px; padding: 0 5px; border-radius: 4px; background: #0a2bff; color: #fff;
+  font-size: 10px; font-weight: 900; line-height: 17px; letter-spacing: .02em;
+}
+.logo-title { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.logo-title .pf-logos { margin-right: 2px; }
+
+.badge-platform-logo { position: absolute; left: 8px; top: 8px; display: inline-flex; filter: drop-shadow(0 1px 2px rgba(0,0,0,.4)); }
+.badge-platform-logo.right { left: auto; right: 8px; }
+.live-card .thumb .badge-live { left: 8px; }
+
+/* 공지 목록 */
+.notice-list { list-style: none; margin: 0; padding: 0; display: grid; }
+.notice-list > li + li { border-top: 1px solid var(--line); }
+.notice-row {
+  width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px;
+  padding: 12px 6px; border: 0; background: none; color: var(--text); text-align: left; border-radius: 10px; font: inherit;
+}
+.notice-row:hover { background: var(--surface-2); }
+.notice-pf { display: inline-flex; width: 38px; justify-content: center; }
+.notice-main { display: grid; gap: 2px; min-width: 0; }
+.notice-main strong { font-size: 14.5px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-sum { font-size: 12.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notice-pin, .notice-kind {
+  display: inline-block; margin-right: 6px; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 800; vertical-align: 1px;
+}
+.notice-pin { background: var(--accent); color: #fff; }
+.notice-kind { border: 1px solid var(--line); color: var(--muted); }
+.notice-who { font-size: 13px; font-weight: 700; color: var(--purple); white-space: nowrap; }
+.notice-time { font-size: 12.5px; color: var(--muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.notice-time .badge-new { margin-left: 4px; }
+@media (max-width: 640px) {
+  .notice-row { grid-template-columns: auto minmax(0, 1fr); row-gap: 4px; }
+  .notice-who, .notice-time { grid-column: 2; }
+  .notice-who { grid-row: 2; justify-self: start; }
+  .notice-time { grid-row: 2; justify-self: end; }
+}
+
+/* 멤버: 방송 중이면 보러 가기 */
+.live-go {
+  display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 999px;
+  background: var(--accent); color: #fff; font-size: 12.5px; font-weight: 800; white-space: nowrap;
+}
+.live-go:hover { filter: brightness(1.1); }
+.live-go .live-dot { background: #fff; box-shadow: none; width: 7px; height: 7px; }
+.live-go .pf-logo.soop { background: #fff; color: #0a2bff; }
+.mp-info .live-go { margin: 6px 0 4px; }
+
+.sub-head { margin: 22px 0 10px; font-size: 14px; color: var(--muted); }
+.member-chips.wrap { flex-wrap: wrap; overflow: visible; }
+.member-chips span {
+  display: flex; align-items: center; gap: 7px; padding: 5px 13px 5px 5px;
+  border: 1px solid var(--line); border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--muted);
+}

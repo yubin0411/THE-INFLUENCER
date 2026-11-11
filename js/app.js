@@ -10,16 +10,30 @@
   const crewName = (id) => site.crews.find((c) => c.id === id)?.name ?? "";
 
   // 모든 크루 드롭다운에 공통으로 붙는 하위 메뉴
+  // 한 크루만 쓰는 사이트: 상단 메뉴에 바로 나오는 페이지들
   const PAGES = [
-    { id: "price", name: "전체 가격표" },
+    { id: "price", name: "가격표" },
     { id: "sigs", name: "시그목록" },
     { id: "members", name: "멤버" },
-    { id: "live", name: "Live" },
-    { id: "posts", name: "게시글" },
+    { id: "live", name: "LIVE" },
+    { id: "notice", name: "공지" },
+    { id: "vod", name: "VOD" },
     { id: "shorts", name: "쇼츠" },
     { id: "files", name: "파일 다운로드" },
     { id: "newsig", name: "뉴시그·안무영상" },
   ];
+  const MEMBER_PAGES = ["notice", "vod", "shorts"]; // 멤버별로 골라 볼 수 있는 페이지
+  const OLD_PAGES = { posts: "notice" };
+  const mainCrew = () => site.crews[0]?.id || "";
+  const inCrew = (x) => !x.crew || x.crew === mainCrew();
+
+  /* ---------- 플랫폼 로고 ---------- */
+  const LOGO = {
+    youtube: '<svg class="pf-logo yt" viewBox="0 0 28 20" role="img" aria-label="YouTube"><rect width="28" height="20" rx="5" fill="#FF0000"/><path d="M11.2 5.6 18.8 10l-7.6 4.4z" fill="#fff"/></svg>',
+    soop: '<span class="pf-logo soop" role="img" aria-label="SOOP">SOOP</span>',
+  };
+  const logo = (pf) => LOGO[pf === "soop" ? "soop" : "youtube"];
+  const fillLogos = (root = document) => $$("[data-logos]", root).forEach((el) => { el.innerHTML = el.dataset.logos.split(" ").map(logo).join(""); });
   const pageHref = (crew, page, channel) => `#crew/${encodeURIComponent(crew)}/${page}${channel ? `/${encodeURIComponent(channel)}` : ""}`;
 
   /* ---------- 라우팅: #home, #crew/{크루id}/{메뉴} ---------- */
@@ -30,9 +44,10 @@
     const m = location.hash.match(/^#crew\/([^/]+)(?:\/([^/]+))?(?:\/([^/]+))?$/);
     const crew = m && decodeURIComponent(m[1]);
     if (!crew || !site.crews.some((c) => c.id === crew)) return { crew: null, page: "home", channel: null };
-    const page = PAGES.some((p) => p.id === m[2]) ? m[2] : PAGES[0].id;
+    const want = OLD_PAGES[m[2]] || m[2];
+    const page = PAGES.some((p) => p.id === want) ? want : PAGES[0].id;
     const channel = m[3] && decodeURIComponent(m[3]);
-    const valid = (page === "posts" || page === "shorts") && site.members.some((mb) => mb.id === channel && mb.crew === crew && mb.youtube);
+    const valid = MEMBER_PAGES.includes(page) && site.members.some((mb) => mb.id === channel);
     return { crew, page, channel: valid ? channel : null };
   }
 
@@ -47,7 +62,7 @@
     if (home) {
       renderRank();
       renderLive();
-      renderCrewSections();
+      loadHomeFeeds();
       renderHomeSigs();
     } else {
       renderPage();
@@ -57,29 +72,17 @@
   window.addEventListener("hashchange", route);
 
   /* ---------- 상단 메뉴 (크루별 드롭다운) ---------- */
-  function navHtml(prefix) {
-    const homeLink = `<a href="#home" class="nav-link ${current.page === "home" ? "is-active" : ""}"><span class="nav-label">홈</span></a>`;
-    const crews = site.crews.map((c) => {
-      const active = c.id === current.crew;
-      const menuId = `${prefix}-dd-${c.id}`;
-      const items = PAGES.map((p) => {
-        const here = active && p.id === current.page;
-        return `<li><a href="${pageHref(c.id, p.id)}" class="${here ? "is-current" : ""}" ${here ? 'aria-current="page"' : ""}>${p.name}</a></li>`;
-      }).join("");
-      return `
-        <div class="nav-item ${active ? "is-active" : ""}">
-          <button type="button" class="nav-link dd-toggle" aria-expanded="false" aria-controls="${esc(menuId)}">
-            <span class="nav-label">${esc(c.name)}</span><span class="caret" aria-hidden="true">▼</span>
-          </button>
-          <ul class="dd-menu" id="${esc(menuId)}" hidden>${items}</ul>
-        </div>`;
-    }).join("");
-    return homeLink + crews;
+  // 크루 드롭다운 없이 메뉴를 바로 나열
+  function navHtml() {
+    const link = (href, name, on) => `<a href="${href}" class="nav-link ${on ? "is-active" : ""}" ${on ? 'aria-current="page"' : ""}><span class="nav-label">${name}</span></a>`;
+    return link("#home", "홈", current.page === "home")
+      + PAGES.map((p) => link(pageHref(mainCrew(), p.id), p.name, current.page === p.id)).join("");
   }
 
   function renderNav() {
-    $("#desktop-nav").innerHTML = navHtml("d");
-    $("#mobile-menu").innerHTML = navHtml("m");
+    $("#desktop-nav").innerHTML = navHtml();
+    $("#mobile-menu").innerHTML = navHtml();
+    $$("[data-page-link]").forEach((a) => { a.href = pageHref(mainCrew(), a.dataset.pageLink); });
   }
 
   function closeDropdowns(except) {
@@ -245,6 +248,31 @@
     return h ? `${h}:${pad(m)}:${pad(sec)}` : `${m}:${pad(sec)}`;
   };
 
+  const fmtStamp = (ms) => {
+    const d = new Date(ms), now = new Date();
+    const date = d.getFullYear() === now.getFullYear() ? `${d.getMonth() + 1}.${d.getDate()}` : `${d.getFullYear()}.${d.getMonth() + 1}.${d.getDate()}`;
+    return `${date} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  // 공지 한 줄: 플랫폼 로고 · 멤버 · 제목 · 날짜와 시간
+  const noticeRow = (n) => {
+    const inner = `
+      <span class="notice-pf">${logo(n.platform)}</span>
+      <span class="notice-main">
+        <strong>${n.platform === "youtube" ? '<span class="notice-kind">새 영상</span>' : ""}${esc(n.title || "(제목 없음)")}</strong>
+        ${n.summary ? `<span class="notice-sum">${esc(n.summary)}</span>` : ""}
+      </span>
+      <span class="notice-who">${esc(n.member)}</span>
+      <time class="notice-time" datetime="${new Date(n.at).toISOString()}">${fmtStamp(n.at)}${isNew(n.at, 1) ? ' <span class="badge-new">NEW</span>' : ""}</time>`;
+    return n.platform === "youtube"
+      ? `<li><button type="button" class="notice-row" data-video="${esc(n.id)}">${inner}</button></li>`
+      : `<li><a class="notice-row" href="${esc(n.url)}" target="_blank" rel="noopener">${inner}</a></li>`;
+  };
+  const vodCard = (v) => `
+    <a class="post-card vod-card" href="${esc(v.url)}" target="_blank" rel="noopener">
+      <div class="thumb">${thumb(v.thumb, v.title)}<span class="badge-platform-logo">${logo("soop")}</span>${v.duration ? `<span class="duration">${fmtDuration(v.duration)}</span>` : ""}</div>
+      <div class="card-info"><strong>${esc(v.title)}</strong><span>${esc(v.member)} · ${fmtStamp(v.at)}</span></div>
+    </a>`;
+
   const videoCard = (v) => v.type === "short"
     ? `<button type="button" class="short-card" data-video="${esc(v.id)}">
          <div class="thumb">${thumb(v.thumb, v.title)}<span class="play" aria-hidden="true">▶</span></div>
@@ -256,38 +284,26 @@
        </button>`;
 
   /* ---------- 라이브 ---------- */
-  let liveFilter = "all";
   let liveNow = [];
 
   async function loadLive() {
-    try { liveNow = (await api("api/live")).live ?? []; } catch { liveNow = []; }
+    try { liveNow = ((await api("api/live")).live ?? []).filter(inCrew); } catch { liveNow = []; }
     if (current.page === "home") renderLive();
     if (current.page === "live") renderPage();
   }
 
   const liveCard = (l) => `
       <a class="live-card" href="${esc(l.url)}" target="_blank" rel="noopener">
-        <div class="thumb">${thumb(l.thumb, l.title)}<span class="badge-live">LIVE</span>${l.platform === "soop" ? '<span class="badge-platform soop">SOOP</span>' : ""}<span class="viewers">${(l.viewers || 0).toLocaleString()}명 시청</span></div>
-        <div class="card-info"><strong>${esc(l.title)}</strong><span>${esc(l.member)}${l.crew ? ` · ${esc(crewName(l.crew))}` : ""}</span></div>
+        <div class="thumb">${thumb(l.thumb, l.title)}<span class="badge-live">LIVE</span><span class="badge-platform-logo right">${logo(l.platform)}</span><span class="viewers">${(l.viewers || 0).toLocaleString()}명 시청</span></div>
+        <div class="card-info"><strong>${esc(l.title)}</strong><span>${esc(l.member)} · ${l.platform === "soop" ? "SOOP" : "유튜브"}</span></div>
       </a>`;
 
+  // 유튜브 · SOOP 방송을 한 칸에 같이 (시청자 많은 순)
   function renderLive() {
-    $("#home-live").hidden = liveNow.length === 0;
-    const filters = [{ id: "all", name: "전체" }, ...site.crews.filter((c) => liveNow.some((l) => l.crew === c.id))];
-    if (!filters.some((f) => f.id === liveFilter)) liveFilter = "all";
-    $("#live-filter").innerHTML = filters.length > 2
-      ? filters.map((f) => `<button type="button" class="chip ${f.id === liveFilter ? "is-active" : ""}" data-live="${f.id}">${esc(f.name)}</button>`).join("")
-      : "";
-    const list = liveFilter === "all" ? liveNow : liveNow.filter((l) => l.crew === liveFilter);
-    $("#live-list").innerHTML = list.map(liveCard).join("");
+    const yt = liveNow.filter((l) => l.platform !== "soop").length, sp = liveNow.length - yt;
+    $("#live-note").textContent = liveNow.length ? `방송 중 ${liveNow.length}${yt && sp ? ` · 유튜브 ${yt} · SOOP ${sp}` : ""}` : "";
+    $("#live-list").innerHTML = liveNow.length ? liveNow.map(liveCard).join("") : empty("지금 방송 중인 멤버가 없어요. 방송을 켜면 1분 안에 여기에 떠요.");
   }
-
-  $("#live-filter").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-live]");
-    if (!b) return;
-    liveFilter = b.dataset.live;
-    renderLive();
-  });
 
   /* ---------- 방송 시간 순위 ---------- */
   let rank = null;          // 이번 달 순위 (홈 화면)
@@ -308,16 +324,25 @@
   const memberAvatar = (it, cls = "") =>
     it.thumb ? `<img class="${cls}" src="${esc(it.thumb)}" alt="" loading="lazy">` : `<span class="${cls} member-avatar" aria-hidden="true"></span>`;
 
+  // 순위에서 이 크루 멤버만 남기고 순위를 다시 매김
+  function onlyCrew(r) {
+    if (!r) return r;
+    const items = r.items.filter(inCrew).map((it) => ({ ...it }));
+    let rank = 0;
+    items.forEach((it, i) => { it.rank = it.seconds ? (i && items[i - 1].seconds === it.seconds ? rank : (rank = i + 1)) : null; });
+    return { ...r, items };
+  }
+
   async function loadRanking() {
     try { rank = await api("api/ranking"); } catch { return; }
+    rank = onlyCrew(rank);
     if (current.page === "home") renderRank();
     // 자세히 보기가 이번 달을 보고 있으면 같이 갱신
     if ($("#modal-rank").open && rankView?.current) { rankView = rank; renderRankTable(); }
   }
 
   function renderRank() {
-    $("#home-rank").hidden = !rank || !rank.items.length;
-    if (!rank) return;
+    if (!rank) { $("#rank-podium").innerHTML = `<li class="podium-empty">${empty("불러오는 중…")}</li>`; return; }
     const top = rank.items.filter((it) => it.seconds > 0).slice(0, 3);
     const live = rank.items.filter((it) => it.is_live).length;
     $("#rank-note").textContent = `${monthLabel(rank.month)} · 1분마다 갱신${live ? ` · ${live}명 방송 중` : ""}`;
@@ -328,7 +353,6 @@
             <span class="medal" aria-label="${it.rank}위">${MEDALS[it.rank - 1] || `${it.rank}th`}</span>
             <span class="podium-avatar">${memberAvatar(it)}${it.is_live ? '<span class="badge-live">LIVE</span>' : ""}</span>
             <strong class="podium-name">${esc(it.name)}</strong>
-            ${it.crew ? `<span class="podium-crew">${esc(crewName(it.crew))}</span>` : ""}
             <span class="podium-time">${fmtHours(it.seconds)}</span>
             <span class="podium-sub">방송 ${it.days}일 · ${it.sessions}회</span>
           </button>
@@ -411,46 +435,31 @@
   });
   $("#rank-month").addEventListener("change", async (e) => {
     try {
-      rankView = await api(`api/ranking?month=${e.target.value}`);
+      rankView = onlyCrew(await api(`api/ranking?month=${e.target.value}`));
       renderRankTable();
     } catch {}
   });
 
-  /* ---------- 크루별 게시글 / 쇼츠 슬라이더 ---------- */
-  const TYPE_LABEL = { post: "게시글", short: "Shorts" };
+  /* ---------- 홈: 공지 · VOD · 쇼츠 ---------- */
+  const NOTICE_COUNT = 8;
+  const feedFail = (el) => { el.innerHTML = empty("불러오지 못했습니다."); };
+  const ofCrew = (items) => items.filter(inCrew);
 
-  function renderCrewSections() {
-    const keys = ["post", "short"].flatMap((type) => site.crews.map((c) => ({ type, crew: c })));
-    $("#crew-sections").innerHTML = keys.map(({ type, crew }) => {
-      const key = `${type}-${crew.id}`;
-      const title = `${esc(crew.name)} ${TYPE_LABEL[type]}`;
-      return `
-        <section class="panel" aria-labelledby="${key}-title">
-          <div class="panel-head">
-            <h2 id="${key}-title">${title} <span class="head-note">계정별 최신</span></h2>
-            <div class="head-tools">
-              <a class="ghost-btn" href="${pageHref(crew.id, type === "short" ? "shorts" : "posts")}">전체보기</a>
-              <nav class="arrows" aria-label="${title} 넘기기">
-                <button type="button" data-slide="${key}" data-dir="-1" aria-label="이전">‹</button>
-                <button type="button" data-slide="${key}" data-dir="1" aria-label="다음">›</button>
-              </nav>
-            </div>
-          </div>
-          <div class="slider ${type === "short" ? "is-shorts" : ""}" id="slider-${key}" data-type="${type}" data-crew-id="${crew.id}">${empty("불러오는 중…")}</div>
-        </section>`;
-    }).join("");
-    loadSliders();
-  }
-
-  async function loadSliders() {
-    await Promise.all($$("#crew-sections .slider").map(async (el) => {
-      try {
-        const { items } = await api(`api/videos?type=${el.dataset.type}&crew=${encodeURIComponent(el.dataset.crewId)}&latest=1&limit=${SLIDER_COUNT}`);
-        el.innerHTML = items.length ? items.map(videoCard).join("") : empty("아직 올라온 영상이 없습니다.");
-      } catch {
-        el.innerHTML = empty("불러오지 못했습니다.");
-      }
-    }));
+  async function loadHomeFeeds() {
+    const crew = encodeURIComponent(mainCrew());
+    await Promise.all([
+      api(`api/notices?limit=${NOTICE_COUNT * 2}`).then(({ items }) => {
+        const list = ofCrew(items).slice(0, NOTICE_COUNT);
+        $("#notice-list").innerHTML = list.length ? list.map(noticeRow).join("") : `<li>${empty("아직 올라온 공지가 없어요. 멤버의 SOOP 방송국에 글이 올라오면 바로 여기에 떠요.")}</li>`;
+      }).catch(() => feedFail($("#notice-list"))),
+      api(`api/vods?limit=${SLIDER_COUNT}`).then(({ items }) => {
+        const list = ofCrew(items);
+        $("#slider-vod").innerHTML = list.length ? list.map(vodCard).join("") : empty("아직 올라온 VOD가 없어요. SOOP 다시보기가 올라오면 자동으로 들어와요.");
+      }).catch(() => feedFail($("#slider-vod"))),
+      api(`api/videos?type=short&crew=${crew}&latest=1&limit=${SLIDER_COUNT}`).then(({ items }) => {
+        $("#slider-shorts").innerHTML = items.length ? items.map(videoCard).join("") : empty("아직 올라온 쇼츠가 없어요.");
+      }).catch(() => feedFail($("#slider-shorts"))),
+    ]);
   }
 
   document.addEventListener("click", (e) => {
@@ -461,7 +470,8 @@
   });
 
   /* ---------- 크루 페이지 ---------- */
-  const list = { type: "post", crew: "", channel: "", before: null };
+  // 더 불러오기 목록: short(쇼츠) · notice(공지) · vod
+  const list = { type: "short", crew: "", channel: "", before: null };
   const channelUrl = (m) => `https://www.youtube.com/${m.handle ? m.handle : `channel/${m.youtube}`}`;
   const soopUrl = (m) => `https://www.sooplive.co.kr/station/${encodeURIComponent(m.soop)}`;
   const avatar = (m) => (m.thumb ? `<img src="${esc(m.thumb)}" alt="" loading="lazy">` : `<span class="member-avatar" aria-hidden="true"></span>`);
@@ -471,11 +481,14 @@
     const title = PAGES.find((p) => p.id === page).name;
     const member = site.members.find((m) => m.id === channel);
     $("#page-crumb").textContent = crewName(crew);
-    $("#page-title").textContent = member ? `${title} · ${member.name}` : title;
+    const pageLogos = { live: "youtube soop", notice: "youtube soop", vod: "soop", shorts: "youtube" }[page];
+    $("#page-title").innerHTML = `${pageLogos ? `<span class="pf-logos" data-logos="${pageLogos}"></span>` : ""}${esc(member ? `${title} · ${member.name}` : title)}`;
+    $("#page-title").classList.toggle("logo-title", !!pageLogos);
+    fillLogos($("#page-title"));
     $("#page-tools").innerHTML = "";
     $("#list-more").hidden = true;
     $("#page-tabs").innerHTML = PAGES.map((p) =>
-      `<a href="${pageHref(crew, p.id, p.id === "posts" || p.id === "shorts" ? channel : null)}" class="${p.id === page ? "is-current" : ""}" ${p.id === page ? 'aria-current="page"' : ""}>${p.name}</a>`).join("");
+      `<a href="${pageHref(crew, p.id, MEMBER_PAGES.includes(p.id) ? channel : null)}" class="${p.id === page ? "is-current" : ""}" ${p.id === page ? 'aria-current="page"' : ""}>${p.name}</a>`).join("");
     const body = $("#page-body");
     const crewSigs = () => sigs.filter((s) => s.crew === crew);
 
@@ -568,18 +581,22 @@
         ? `<div class="member-grid">${members.map(memberCard).join("")}</div>`
         : empty("등록된 멤버가 없습니다. 관리자 페이지의 멤버 · 채널에서 이 크루로 멤버를 추가하세요.");
     } else if (page === "live") {
-      const lives = liveNow.filter((l) => l.crew === crew);
-      body.innerHTML = lives.length ? `<div class="live-grid">${lives.map(liveCard).join("")}</div>` : empty("지금 방송 중인 멤버가 없습니다.");
-    } else if (page === "posts" || page === "shorts") {
-      Object.assign(list, { type: page === "shorts" ? "short" : "post", crew, channel: channel || "", before: null });
-      const members = site.members.filter((m) => m.crew === crew && m.youtube);
+      const off = site.members.filter((m) => !m.is_live && (m.youtube || m.soop));
+      body.innerHTML = `${liveNow.length ? `<div class="live-grid">${liveNow.map(liveCard).join("")}</div>` : empty("지금 방송 중인 멤버가 없습니다. 방송을 켜면 1분 안에 여기에 떠요.")}
+        ${off.length ? `<h3 class="sub-head">오프라인</h3><div class="member-chips wrap">${off.map((m) => `<span>${avatar(m)}${esc(m.name)}</span>`).join("")}</div>` : ""}`;
+    } else if (MEMBER_PAGES.includes(page)) {
+      Object.assign(list, { type: page === "shorts" ? "short" : page, crew, channel: channel || "", before: null });
+      const need = { shorts: (m) => m.youtube, vod: (m) => m.soop, notice: (m) => m.youtube || m.soop }[page];
+      const members = site.members.filter(need);
       const chips = members.length > 1 || channel
         ? `<nav class="member-chips" aria-label="계정별 보기">
              <a href="${pageHref(crew, page)}" class="${channel ? "" : "is-current"}">전체</a>
              ${members.map((m) => `<a href="${pageHref(crew, page, m.id)}" class="${m.id === channel ? "is-current" : ""}" ${m.id === channel ? 'aria-current="true"' : ""}>${avatar(m)}${esc(m.name)}</a>`).join("")}
            </nav>`
         : "";
-      body.innerHTML = `${chips}<div class="video-grid ${page === "shorts" ? "is-shorts" : ""}" id="list-grid"></div>`;
+      body.innerHTML = page === "notice"
+        ? `${chips}<ul class="notice-list" id="list-grid"></ul>`
+        : `${chips}<div class="video-grid ${page === "shorts" ? "is-shorts" : ""}" id="list-grid"></div>`;
       loadMore();
     }
   }
@@ -594,6 +611,10 @@
     ].join("");
   }
   const hasPromise = (m) => !!(m.promise_text || m.promise_image);
+  // 방송 중이면 "LIVE 보러가기" (유튜브인지 SOOP 인지 로고로 표시)
+  const liveLink = (m) => m.is_live && m.live_url
+    ? `<a class="live-go" href="${esc(m.live_url)}" target="_blank" rel="noopener">${logo(m.live_platform)}<span class="live-dot"></span>LIVE 보러가기</a>`
+    : "";
 
   const memberCard = (m) => `
     <article class="member-card">
@@ -603,13 +624,14 @@
         <strong>${esc(m.name)}</strong>
         ${m.quote ? `<span class="member-quote">${esc(m.quote)}</span>` : ""}
       </button>
+      ${liveLink(m)}
       <span class="member-socials">${socialLinks(m)}</span>
       <span class="member-btns">
         <button type="button" data-member-open="${esc(m.id)}" data-tab="profile" ${m.profile_text ? "" : "disabled"}>프로필</button>
         <button type="button" data-member-open="${esc(m.id)}" data-tab="promise" ${hasPromise(m) ? "" : "disabled"}>공약</button>
         <button type="button" data-member-open="${esc(m.id)}" data-tab="sigs" ${m.sig_ids.length ? "" : "disabled"}>시그</button>
       </span>
-      ${m.youtube ? `<span class="member-links"><a href="${pageHref(m.crew, "posts", m.id)}">게시글</a><a href="${pageHref(m.crew, "shorts", m.id)}">쇼츠</a></span>` : ""}
+      ${m.youtube || m.soop ? `<span class="member-links"><a href="${pageHref(mainCrew(), "notice", m.id)}">공지</a>${m.soop ? `<a href="${pageHref(mainCrew(), "vod", m.id)}">VOD</a>` : ""}${m.youtube ? `<a href="${pageHref(mainCrew(), "shorts", m.id)}">쇼츠</a>` : ""}</span>` : ""}
     </article>`;
 
   const MP_TABS = [{ id: "profile", name: "프로필" }, { id: "promise", name: "공약" }, { id: "sigs", name: "시그" }];
@@ -625,6 +647,7 @@
         <p class="crumb">${esc([crewName(m.crew), m.role_title].filter(Boolean).join(" · "))}</p>
         <h2 id="mp-name">${esc(m.name)}</h2>
         ${m.quote ? `<p class="mp-quote">${esc(m.quote)}</p>` : ""}
+        ${liveLink(m)}
         <span class="member-socials left">${socialLinks(m)}</span>
       </div>`;
     const first = tab || (m.profile_text ? "profile" : hasPromise(m) ? "promise" : m.sig_ids.length ? "sigs" : "profile");
@@ -664,12 +687,16 @@
     const req = { ...list };
     btn.disabled = true;
     try {
-      const q = new URLSearchParams({ type: req.type, crew: req.crew, limit: LIST_COUNT, ...(req.channel ? { member: req.channel } : {}), ...(req.before ? { before: req.before } : {}) });
-      const { items, more } = await api(`api/videos?${q}`);
+      const q = new URLSearchParams({ limit: LIST_COUNT, ...(req.channel ? { member: req.channel } : {}), ...(req.before ? { before: req.before } : {}) });
+      const src = { short: { url: `api/videos?type=short&crew=${encodeURIComponent(req.crew)}&`, card: videoCard, at: "published_at", none: "아직 올라온 쇼츠가 없습니다." },
+        notice: { url: "api/notices?", card: noticeRow, at: "at", none: "아직 올라온 공지가 없습니다." },
+        vod: { url: "api/vods?", card: vodCard, at: "at", none: "아직 올라온 VOD가 없습니다." } }[req.type];
+      const { items: raw, more } = await api(`${src.url}${q}`);
       if (grid !== $("#list-grid")) return; // 그새 다른 페이지로 이동함
-      grid.insertAdjacentHTML("beforeend", items.map(videoCard).join(""));
-      if (!req.before && !items.length) grid.innerHTML = empty("아직 올라온 영상이 없습니다.");
-      list.before = items.at(-1)?.published_at ?? list.before;
+      const items = req.type === "short" ? raw : ofCrew(raw);
+      grid.insertAdjacentHTML("beforeend", items.map(src.card).join(""));
+      if (!req.before && !items.length) grid.innerHTML = req.type === "notice" ? `<li>${empty(src.none)}</li>` : empty(src.none);
+      list.before = raw.at(-1)?.[src.at] ?? list.before;
       btn.hidden = !more;
     } catch {
       if (grid === $("#list-grid") && !req.before) grid.innerHTML = empty("불러오지 못했습니다.");
@@ -709,7 +736,7 @@
   detail.addEventListener("close", () => { $("#detail-player").innerHTML = ""; });
 
   /* ---------- 시그 ---------- */
-  const isNew = (ms) => ms && (Date.now() - ms) / 864e5 <= NEW_DAYS;
+  const isNew = (ms, days = NEW_DAYS) => ms && (Date.now() - ms) / 864e5 <= days;
   // 시그 단가: 별풍선 개수
   const won = (n) => `${Number(n || 0).toLocaleString()}개`;
   const refsOf = (s) => String(s.ref_url || "").split(/\s+/).filter(Boolean);
@@ -853,21 +880,35 @@
   /* ---------- 시작 ---------- */
   async function loadSite() {
     try { Object.assign(site, await api("api/site")); } catch {}
-    try { sigs = await api("api/sigs"); } catch { sigs = []; }
+    // 한 크루만 쓰는 사이트: 첫 번째 크루와 그 멤버만
+    site.crews = site.crews.slice(0, 1);
+    site.members = site.members.filter(inCrew);
+    if (site.crews[0]) document.title = site.crews[0].name;
+    try { sigs = (await api("api/sigs")).filter(inCrew); } catch { sigs = []; }
     $("#backwall-member").innerHTML = site.members.length
       ? site.members.map((m) => `<option>${esc(m.name)}</option>`).join("")
       : "<option value=''>등록된 멤버가 없습니다</option>";
     renderUser();
   }
 
+  // 멤버 방송 상태(LIVE 표시) 1분마다 갱신
+  async function refreshMembers() {
+    let fresh;
+    try { fresh = (await api("api/site")).members.filter(inCrew); } catch { return; }
+    const was = site.members.map((m) => `${m.id}:${m.live_url}`).join();
+    site.members = fresh;
+    if (current.page === "members" && was !== fresh.map((m) => `${m.id}:${m.live_url}`).join()) renderPage();
+  }
+
   $("#year").textContent = new Date().getFullYear();
   loadSite().then(() => {
-    renderHomeSigs = sigTable({ search: $("#sig-search"), body: $("#sig-list"), pager: $("#sig-pages"), rows: () => sigs, sort: () => "new", showCrew: true });
+    fillLogos();
+    renderHomeSigs = sigTable({ search: $("#sig-search"), body: $("#sig-list"), pager: $("#sig-pages"), rows: () => sigs, sort: () => "new" });
     route();
     loadLive();
     loadRanking();
-    setInterval(() => { loadLive(); loadRanking(); }, REFRESH_MS);
-    // 새 영상 반영 (홈 화면에서만)
-    setInterval(() => { if (current.page === "home") loadSliders(); }, REFRESH_MS * 5);
+    setInterval(() => { loadLive(); loadRanking(); refreshMembers(); }, REFRESH_MS);
+    // 공지 · VOD · 쇼츠 새로 반영 (홈 화면에서만, 1분마다)
+    setInterval(() => { if (current.page === "home") loadHomeFeeds(); }, REFRESH_MS);
   });
 })();

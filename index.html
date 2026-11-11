@@ -49,8 +49,8 @@
     <h1 class="sr-only">(주) 이터널 통합 홈</h1>
 
     <div id="home-view" class="view">
-      <!-- 이번 달 개인방송 시간 순위 (유튜브 라이브 + SOOP) -->
-      <section class="panel rank-panel" id="home-rank" aria-labelledby="rank-title" hidden>
+      <!-- 이번 달 개인방송 시간 순위 (유튜브 라이브 + SOOP) — 홈 맨 위 -->
+      <section class="panel rank-panel" id="home-rank" aria-labelledby="rank-title">
         <div class="panel-head">
           <h2 id="rank-title">방송 시간 순위 <span class="head-note" id="rank-note"></span></h2>
           <button type="button" class="ghost-btn" data-rank-open>자세히 보기</button>
@@ -58,17 +58,53 @@
         <ol class="podium" id="rank-podium"></ol>
       </section>
 
-      <!-- 라이브 (라이브 중인 채널이 있을 때만 표시) -->
-      <section class="panel" id="home-live" aria-labelledby="live-title" hidden>
+      <!-- 라이브: 유튜브 + SOOP 같이 -->
+      <section class="panel" id="home-live" aria-labelledby="live-title">
         <div class="panel-head">
-          <h2 id="live-title"><span class="live-dot"></span>지금 방송 중</h2>
-          <div class="chips" id="live-filter"></div>
+          <h2 id="live-title" class="logo-title"><span class="pf-logos" data-logos="youtube soop"></span><span class="live-dot"></span>LIVE <span class="head-note" id="live-note"></span></h2>
+          <a class="ghost-btn" data-page-link="live">전체보기</a>
         </div>
         <div class="live-grid" id="live-list"></div>
       </section>
 
-      <!-- 크루별 게시글 / 쇼츠 (자동 생성) -->
-      <div id="crew-sections" class="view"></div>
+      <!-- 공지: SOOP 방송국 글 + 유튜브 새 영상 -->
+      <section class="panel" id="home-notice" aria-labelledby="notice-title">
+        <div class="panel-head">
+          <h2 id="notice-title" class="logo-title"><span class="pf-logos" data-logos="youtube soop"></span>공지 <span class="head-note">올라오면 바로 반영</span></h2>
+          <a class="ghost-btn" data-page-link="notice">전체보기</a>
+        </div>
+        <ul class="notice-list" id="notice-list"></ul>
+      </section>
+
+      <!-- SOOP 다시보기 VOD (자동) -->
+      <section class="panel" id="home-vod" aria-labelledby="vod-title">
+        <div class="panel-head">
+          <h2 id="vod-title" class="logo-title"><span class="pf-logos" data-logos="soop"></span>VOD <span class="head-note">새 다시보기 자동 등록</span></h2>
+          <div class="head-tools">
+            <a class="ghost-btn" data-page-link="vod">전체보기</a>
+            <nav class="arrows" aria-label="VOD 넘기기">
+              <button type="button" data-slide="vod" data-dir="-1" aria-label="이전">‹</button>
+              <button type="button" data-slide="vod" data-dir="1" aria-label="다음">›</button>
+            </nav>
+          </div>
+        </div>
+        <div class="slider" id="slider-vod"></div>
+      </section>
+
+      <!-- 쇼츠 -->
+      <section class="panel" id="home-shorts" aria-labelledby="shorts-title">
+        <div class="panel-head">
+          <h2 id="shorts-title" class="logo-title"><span class="pf-logos" data-logos="youtube"></span>쇼츠 <span class="head-note">계정별 최신</span></h2>
+          <div class="head-tools">
+            <a class="ghost-btn" data-page-link="shorts">전체보기</a>
+            <nav class="arrows" aria-label="쇼츠 넘기기">
+              <button type="button" data-slide="shorts" data-dir="-1" aria-label="이전">‹</button>
+              <button type="button" data-slide="shorts" data-dir="1" aria-label="다음">›</button>
+            </nav>
+          </div>
+        </div>
+        <div class="slider is-shorts" id="slider-shorts"></div>
+      </section>
 
       <!-- 새로 들어온 시그 -->
       <section class="panel" id="new-sigs" aria-labelledby="new-sigs-title">
@@ -82,7 +118,7 @@
         <div class="table-wrap">
           <table class="sig-table">
             <thead>
-              <tr><th>분류</th><th>시그 이름</th><th>크루</th><th class="num">시그단가</th><th class="center">레퍼런스 · 레슨</th></tr>
+              <tr><th>분류</th><th>시그 이름</th><th class="num">시그단가</th><th class="center">레퍼런스 · 레슨</th></tr>
             </thead>
             <tbody id="sig-list"></tbody>
           </table>
