@@ -551,6 +551,8 @@ const ytId = (u) => String(u).match(/(?:youtu\.be\/|\/shorts\/|\/live\/|\/embed\
 const driveId = (u) => String(u).match(/drive\.google\.com\/(?:file\/d\/|open\?id=|uc\?id=)([\w-]{10,})/)?.[1];
 const lessonKind = (u) => (ytId(u) ? "youtube" : driveId(u) ? "drive" : "link");
 const parsePrice = (v) => Number(String(v ?? "").replace(/[^\d]/g, "")) || 0;
+// 레퍼런스 칸: 주소 여러 개 (띄어쓰기 · 줄바꿈 · 쉼표로 구분) → 줄바꿈으로 묶어 저장
+const refUrls = (v) => [...new Set(String(v ?? "").split(/[\s,]+/).filter((u) => /^https?:\/\//i.test(u)).map((u) => u.slice(0, 500)))].slice(0, 10).join("\n");
 
 // 레슨 칸 → 링크 / 파일 이름 목록 ("레몬에이드.mp4 레몬에이드 0.7.mp4" 처럼 여러 개도 분리)
 function lessonTokens(text) {
@@ -668,7 +670,7 @@ route("POST", "/api/admin/sigs", async (req) => {
   requireAdmin(req);
   const b = await readJson(req);
   const name = str(b.name, 100) || fail(400, "시그 이름을 입력하세요.");
-  const v = [str(b.category, 30), name, parsePrice(b.price), str(b.ref_url, 500), b.hidden ? 1 : 0, Date.now()];
+  const v = [str(b.category, 30), name, parsePrice(b.price), refUrls(b.ref_url), b.hidden ? 1 : 0, Date.now()];
   if (b.id) {
     db.prepare("UPDATE sigs SET category = ?, name = ?, price = ?, ref_url = ?, hidden = ?, updated_at = ? WHERE id = ?").run(...v, Number(b.id));
     return { ok: true };
@@ -714,7 +716,7 @@ function importSigs(crew, rows0, prune) {
 
   tx(() => rows.forEach((r, i) => {
     const hidden = /x|제외/i.test(String(r.exclude || "")) ? 1 : 0;
-    const vals = [str(r.category, 30), parsePrice(r.price), str(r.ref, 500), hidden, i + 1, now];
+    const vals = [str(r.category, 30), parsePrice(r.price), refUrls(r.ref), hidden, i + 1, now];
     const id = (existing.get(r.name) || []).find((x) => !used.has(x));
     let sigId;
     if (id) {

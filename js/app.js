@@ -710,7 +710,9 @@
 
   /* ---------- 시그 ---------- */
   const isNew = (ms) => ms && (Date.now() - ms) / 864e5 <= NEW_DAYS;
-  const won = (n) => `${Number(n || 0).toLocaleString()}원`;
+  // 시그 단가: 별풍선 개수
+  const won = (n) => `${Number(n || 0).toLocaleString()}개`;
+  const refsOf = (s) => String(s.ref_url || "").split(/\s+/).filter(Boolean);
   const SORTS = {
     sheet: () => 0,
     low: (a, b) => a.price - b.price,
@@ -718,7 +720,7 @@
     new: (a, b) => b.created_at - a.created_at,
   };
   const sigBadges = (s) =>
-    `${s.ref_url ? '<span class="pill">레퍼런스</span>' : ""}${s.lessons ? `<span class="pill on">레슨 ${s.lessons}</span>` : ""}`;
+    `${s.ref_url ? `<span class="pill">레퍼런스${refsOf(s).length > 1 ? ` ${refsOf(s).length}` : ""}</span>` : ""}${s.lessons ? `<span class="pill on">레슨 ${s.lessons}</span>` : ""}`;
 
   // 가격표 이미지 보기: 시그 이미지가 있으면 이미지, 없으면 글자 카드
   const sigImageCard = (s) => `
@@ -820,8 +822,15 @@
            </div>
          </section>`
       : "";
+    // 레퍼런스가 여러 개면 영상 아래 1 · 2 · 3 버튼으로 바꿔 보기
+    const refs = refsOf(s);
+    const refPicker = refs.length > 1
+      ? `<div class="ref-tabs" role="tablist" aria-label="레퍼런스 고르기">${refs.map((_, i) =>
+          `<button type="button" role="tab" data-ref="${i}" class="${i ? "" : "is-active"}" aria-selected="${!i}">${i + 1}</button>`).join("")}</div>`
+      : "";
     $("#sig-media").innerHTML = `${files}
-      <section><h3>${s.category === "신호탄" ? "신호탄" : "유튜브 레퍼런스"}</h3>${s.ref_url ? player(s.ref_url, s.name) : '<p class="hint">등록된 레퍼런스가 없습니다.</p>'}</section>
+      <section class="sig-ref" data-refs="${esc(refs.join(" "))}" data-title="${esc(s.name)}"><h3>${s.category === "신호탄" ? "신호탄" : "유튜브 레퍼런스"} ${refs.length > 1 ? `<span class="muted">${refs.length}</span>` : ""}</h3>
+        ${refs.length ? `<div class="ref-player">${player(refs[0], s.name)}</div>${refPicker}` : '<p class="hint">등록된 레퍼런스가 없습니다.</p>'}</section>
       <section><h3>레슨 영상 ${s.items.length > 1 ? `<span class="muted">${s.items.length}</span>` : ""}</h3>${lessons}</section>`;
     if (!$("#modal-sig").open) $("#modal-sig").showModal();
   }
@@ -829,6 +838,15 @@
   document.addEventListener("click", (e) => {
     const el = e.target.closest("[data-sig-open]");
     if (el) openSig(el.dataset.sigOpen);
+  });
+  $("#sig-media").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-ref]");
+    if (!b || b.classList.contains("is-active")) return;
+    const sec = b.closest(".sig-ref");
+    const url = refsOf({ ref_url: sec.dataset.refs })[Number(b.dataset.ref)];
+    if (!url) return;
+    $(".ref-player", sec).innerHTML = player(url, sec.dataset.title);
+    sec.querySelectorAll("[data-ref]").forEach((x) => { x.classList.toggle("is-active", x === b); x.setAttribute("aria-selected", x === b); });
   });
   $("#modal-sig").addEventListener("close", () => { $("#sig-media").innerHTML = ""; openSigId = null; });
 

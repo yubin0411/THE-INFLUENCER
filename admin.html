@@ -149,7 +149,7 @@
 
         <div class="box">
           <h3>엑셀로 한 번에 올리기</h3>
-          <p class="hint">양식 칸: <b>제외 · 분류 · 시그 이름 · 시그단가 · 유튜브 레퍼런스 · 레슨 영상</b> — 구글 시트에서 <b>파일 → 다운로드 → Microsoft Excel(.xlsx)</b>로 받은 파일을 그대로 올리면 됩니다.<br>
+          <p class="hint">양식 칸: <b>분류 · 시그 이름 · 시그단가(개) · 유튜브 레퍼런스1 · 2 · 3 · 레슨 영상</b> (레퍼런스 칸은 몇 개든 모두 읽음, "제외" 칸에 x 를 넣으면 숨김) — 구글 시트에서 <b>파일 → 다운로드 → Microsoft Excel(.xlsx)</b>로 받은 파일을 그대로 올리면 됩니다.<br>
             이름이 같은 시그는 내용이 바뀌고, 새 이름은 추가됩니다. 제외 칸에 x 가 있으면 사이트에서 숨겨집니다.
             레슨 영상 칸의 유튜브·드라이브 링크는 바로 등록되고, <b>파일 이름(○○.mp4)은 "파일 대기"</b>로 만들어지니 아래 목록에서 영상 파일을 올려 주세요.</p>
           <form class="inline-form" id="excel-form">
@@ -166,8 +166,8 @@
           <form class="inline-form" id="sig-form">
             <label class="field">분류<input name="category" list="sig-categories" maxlength="30" placeholder="엑셀시그"></label>
             <label class="field">시그 이름<input name="name" required maxlength="100"></label>
-            <label class="field">시그단가<input name="price" inputmode="numeric" placeholder="10000"></label>
-            <label class="field grow">유튜브 레퍼런스<input name="ref_url" type="url" placeholder="https://youtube.com/shorts/…"></label>
+            <label class="field">시그단가 (개)<input name="price" inputmode="numeric" placeholder="1000"></label>
+            <label class="field grow">유튜브 레퍼런스 (여러 개는 띄어쓰기로)<input name="ref_url" placeholder="https://youtube.com/shorts/… https://youtu.be/…"></label>
             <button class="primary-btn" type="submit">추가</button>
           </form>
           <datalist id="sig-categories"><option>엑셀시그</option><option>첼린지</option><option>아이돌 시그</option><option>아웃송</option></datalist>

@@ -280,7 +280,7 @@
             <input class="cell-input" name="category" value="${esc(s.category)}" list="sig-categories" maxlength="30" aria-label="분류">
             <input class="cell-input" name="name" value="${esc(s.name)}" maxlength="100" aria-label="시그 이름">
             <input class="cell-input" name="price" value="${s.price.toLocaleString()}" inputmode="numeric" aria-label="시그단가">
-            <input class="cell-input" name="ref_url" value="${esc(s.ref_url)}" placeholder="유튜브 레퍼런스" aria-label="유튜브 레퍼런스">
+            <input class="cell-input" name="ref_url" value="${esc(s.ref_url.split(/\s+/).filter(Boolean).join(" "))}" placeholder="유튜브 레퍼런스 (여러 개는 띄어쓰기로)" aria-label="유튜브 레퍼런스" title="여러 개는 띄어쓰기로 구분">
             <label class="check"><input type="checkbox" name="hidden" ${s.hidden ? "checked" : ""}> 숨김</label>
             <div class="actions">
               <button type="button" class="mini-action ${wait ? "warn" : ""}" data-lessons aria-expanded="${open}">레슨 ${ready}${wait ? ` · 대기 ${wait}` : ""}${s.image ? " · 이미지" : ""}${s.audio ? " · 음원" : ""}</button>
@@ -482,10 +482,16 @@
       const cols = {};
       for (let c = range.s.c; c <= range.e.c; c++) {
         const t = text(head, c).replace(/\s/g, "");
-        for (const [key, re] of Object.entries(MATCH)) if (cols[key] === undefined && re.test(t)) { cols[key] = c; break; }
+        for (const [key, re] of Object.entries(MATCH)) {
+          if (!re.test(t)) continue;
+          if (key === "ref") (cols.refs ||= []).push(c); // 레퍼런스1 · 2 · 3 … 칸 모두
+          else if (cols[key] === undefined) cols[key] = c;
+          break;
+        }
       }
       if (cols.name === undefined) continue;
       mainName = cols.name;
+      const url = (r, c) => { const t = text(r, c); return /^https?:\/\//i.test(t) ? t : cell(r, c)?.link || ""; };
       for (let r = head + 1; r <= range.e.r; r++) {
         const name = text(r, cols.name);
         if (!name) continue;
@@ -494,7 +500,7 @@
           category: text(r, cols.category),
           name,
           price: cell(r, cols.price)?.n ?? "",
-          ref: text(r, cols.ref) || cell(r, cols.ref)?.link || "",
+          ref: (cols.refs || []).map((c) => url(r, c)).filter(Boolean).join("\n"),
           lessons: text(r, cols.lessons),
           lessonLink: cell(r, cols.lessons)?.link || "",
         });
