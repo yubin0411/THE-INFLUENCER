@@ -7,6 +7,7 @@ const http = require("http");
 const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
+const zlib = require("zlib");
 const { DatabaseSync } = require("node:sqlite");
 
 loadEnv();
@@ -16,6 +17,7 @@ const auth = require("./lib/auth");
 const youtube = require("./lib/youtube");
 const soop = require("./lib/soop");
 const broadcasts = require("./lib/broadcasts");
+const sheet = require("./lib/sheet");
 
 const ROOT = __dirname;
 const PORT = Number(process.env.PORT) || 8000;
@@ -323,7 +325,7 @@ route("POST", "/api/admin/crews/:id/move", async (req, p) => {
 route("POST", "/api/admin/crews/:id/delete", (req, p) => {
   requireAdmin(req);
   removeStored([
-    ...db.prepare("SELECT l.file FROM lessons l JOIN sigs s ON s.id = l.sig_id WHERE s.crew_id = ? AND l.file IS NOT NULL").all(p.id).map((r) => `lessons/${r.file}`),
+    ...sigStored("s.crew_id = ?", p.id),
     ...db.prepare("SELECT file FROM files WHERE crew_id = ?").all(p.id).map((r) => `files/${r.file}`),
   ]);
   db.prepare("DELETE FROM crews WHERE id = ?").run(p.id);
@@ -519,10 +521,12 @@ async function saveUpload(req, dir) {
   const dest = path.join(DATA_DIR, "uploads", dir, name);
   const out = fs.createWriteStream(dest);
   let size = 0;
+  let crc = 0;
   try {
     for await (const c of req) {
       size += c.length;
       if (size > MAX_UPLOAD) fail(413, "파일은 2GB 이하만 올릴 수 있습니다.");
+      crc = zlib.crc32(c, crc);
       if (!out.write(c)) await new Promise((r) => out.once("drain", r));
     }
     await new Promise((resolve, reject) => out.end((e) => (e ? reject(e) : resolve())));
@@ -532,7 +536,15 @@ async function saveUpload(req, dir) {
     throw e;
   }
   if (!size) { fs.rm(dest, () => {}); fail(400, "빈 파일입니다."); }
-  return { file: name, orig, size };
+  return { file: name, orig, size, crc };
+}
+
+// 시그에 딸린 파일 (레슨 영상 · 음원 · 시그 이미지) — 시그를 지울 때 같이 지움
+function sigStored(where, ...args) {
+  return [
+    ...db.prepare(`SELECT l.file FROM lessons l JOIN sigs s ON s.id = l.sig_id WHERE ${where} AND l.file IS NOT NULL`).all(...args).map((r) => `lessons/${r.file}`),
+    ...db.prepare(`SELECT s.image, s.audio FROM sigs s WHERE ${where}`).all(...args).flatMap((r) => [r.image && `sigs/${r.image}`, r.audio && `sigs/${r.audio}`]),
+  ];
 }
 
 const ytId = (u) => String(u).match(/(?:youtu\.be\/|\/shorts\/|\/live\/|\/embed\/|[?&]v=)([\w-]{11})/)?.[1];
@@ -547,7 +559,74 @@ function lessonTokens(text) {
 
 const sigFields = `s.id, s.crew_id AS crew, s.category, s.name, s.price, s.ref_url, s.created_at,
   (SELECT COUNT(*) FROM lessons l WHERE l.sig_id = s.id AND l.kind != 'pending') AS lessons,
-  (SELECT MAX(l.created_at) FROM lessons l WHERE l.sig_id = s.id AND l.kind != 'pending') AS last_lesson_at`;
+  (SELECT MAX(l.created_at) FROM lessons l WHERE l.sig_id = s.id AND l.kind != 'pending') AS last_lesson_at,
+  CASE WHEN s.image IS NULL THEN NULL ELSE '/media/sigs/' || s.image END AS image_url,
+  CASE WHEN s.audio IS NULL THEN NULL ELSE '/media/sigs/' || s.audio END AS audio_url,
+  s.image_name, s.image_size, s.audio_name, s.audio_size`;
+
+// 한 번에 받기: 크루(와 분류)의 음원 · 시그 이미지를 zip 하나로 (압축 없이 묶기만, 받으면서 바로 만듦)
+const safeName = (v) => String(v || "").replace(/[\\/:*?"<>|\x00-\x1f]/g, "_").replace(/\s+/g, " ").trim().slice(0, 80) || "시그";
+function zipEntries(rows) {
+  const used = new Set();
+  const out = [];
+  for (const r of rows) {
+    for (const [kind, label] of [["audio", "음원"], ["image", "이미지"]]) {
+      if (!r[kind]) continue;
+      const ext = path.extname(r[kind]) || path.extname(r[`${kind}_name`] || "");
+      let name = `${safeName(r.category || "기타")}/${safeName(r.name)} - ${label}`;
+      for (let n = 2; used.has(name + ext); n++) name = `${safeName(r.category || "기타")}/${safeName(r.name)} (${n}) - ${label}`;
+      used.add(name + ext);
+      out.push({ name: name + ext, file: path.join(DATA_DIR, "uploads", "sigs", r[kind]), size: r[`${kind}_size`], crc: r[`${kind}_crc`] >>> 0 });
+    }
+  }
+  return out;
+}
+async function sendZip(res, filename, entries) {
+  entries = entries.filter((e) => fs.existsSync(e.file));
+  const total = entries.reduce((n, e) => n + 30 + Buffer.byteLength(e.name) + e.size + 46 + Buffer.byteLength(e.name), 22);
+  if (total > 0xffffffff) fail(413, "파일이 너무 많아 한 번에 받을 수 없습니다. 분류별로 받아 주세요.");
+  res.writeHead(200, {
+    "Content-Type": "application/zip", "Content-Length": total,
+    "Content-Disposition": `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`,
+  });
+  const d = new Date();
+  const time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  const central = [];
+  let offset = 0;
+  const write = (buf) => new Promise((resolve) => (res.write(buf) ? resolve() : res.once("drain", resolve)));
+  for (const e of entries) {
+    const name = Buffer.from(e.name);
+    const h = Buffer.alloc(30);
+    h.writeUInt32LE(0x04034b50, 0); h.writeUInt16LE(20, 4); h.writeUInt16LE(0x0800, 6); h.writeUInt16LE(0, 8);
+    h.writeUInt16LE(time, 10); h.writeUInt16LE(date, 12); h.writeUInt32LE(e.crc, 14);
+    h.writeUInt32LE(e.size, 18); h.writeUInt32LE(e.size, 22); h.writeUInt16LE(name.length, 26); h.writeUInt16LE(0, 28);
+    await write(Buffer.concat([h, name]));
+    for await (const chunk of fs.createReadStream(e.file)) await write(chunk);
+    const c = Buffer.alloc(46);
+    c.writeUInt32LE(0x02014b50, 0); c.writeUInt16LE(20, 4); c.writeUInt16LE(20, 6); c.writeUInt16LE(0x0800, 8); c.writeUInt16LE(0, 10);
+    c.writeUInt16LE(time, 12); c.writeUInt16LE(date, 14); c.writeUInt32LE(e.crc, 16); c.writeUInt32LE(e.size, 20); c.writeUInt32LE(e.size, 24);
+    c.writeUInt16LE(name.length, 28); c.writeUInt32LE(offset, 42);
+    central.push(Buffer.concat([c, name]));
+    offset += 30 + name.length + e.size;
+  }
+  const cd = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(cd.length, 12); end.writeUInt32LE(offset, 16);
+  await write(Buffer.concat([cd, end]));
+  res.end();
+}
+
+route("GET", "/api/sigs/download", async (req, _p, url, res) => {
+  const crew = db.prepare("SELECT id, name FROM crews WHERE id = ?").get(url.searchParams.get("crew") || "") || fail(404, "크루를 찾을 수 없습니다.");
+  const cat = str(url.searchParams.get("category"), 30);
+  const rows = db.prepare(`SELECT category, name, image, image_name, image_size, image_crc, audio, audio_name, audio_size, audio_crc
+    FROM sigs WHERE crew_id = ? AND hidden = 0 ${cat ? "AND category = ?" : ""} AND (image IS NOT NULL OR audio IS NOT NULL) ORDER BY sort, id`)
+    .all(crew.id, ...(cat ? [cat] : []));
+  if (!rows.length) fail(404, "받을 음원 · 이미지가 없습니다.");
+  await sendZip(res, `${safeName(crew.name)}${cat ? `_${safeName(cat)}` : ""}_시그.zip`, zipEntries(rows));
+});
 
 // 시그 목록 (공개)
 route("GET", "/api/sigs", (req, _p, url) => {
@@ -579,7 +658,8 @@ route("GET", "/api/files", (req, _p, url) => {
 route("GET", "/api/admin/sigs", (req, _p, url) => {
   requireAdmin(req);
   const crew = url.searchParams.get("crew") || fail(400, "크루를 고르세요.");
-  const sigs = db.prepare("SELECT id, category, name, price, ref_url, hidden, created_at FROM sigs WHERE crew_id = ? ORDER BY sort, id").all(crew);
+  const sigs = db.prepare(`SELECT id, category, name, price, ref_url, hidden, created_at, image, image_name, image_size, audio, audio_name, audio_size
+    FROM sigs WHERE crew_id = ? ORDER BY sort, id`).all(crew);
   const lessons = db.prepare("SELECT l.id, l.sig_id, l.title, l.kind, l.url, l.file, l.size FROM lessons l JOIN sigs s ON s.id = l.sig_id WHERE s.crew_id = ? ORDER BY l.id").all(crew);
   return sigs.map((sg) => ({ ...sg, items: lessons.filter((l) => l.sig_id === sg.id) }));
 });
@@ -603,19 +683,16 @@ route("POST", "/api/admin/sigs", async (req) => {
 
 route("POST", "/api/admin/sigs/:id/delete", (req, p) => {
   requireAdmin(req);
-  removeStored(db.prepare("SELECT file FROM lessons WHERE sig_id = ? AND file IS NOT NULL").all(Number(p.id)).map((r) => `lessons/${r.file}`));
+  removeStored(sigStored("s.id = ?", Number(p.id)));
   db.prepare("DELETE FROM sigs WHERE id = ?").run(Number(p.id));
   return { ok: true };
 });
 
-// 엑셀 업로드: 같은 이름은 수정, 새 이름은 추가 (이름이 같은 시그가 여럿이면 순서대로 짝지음)
-route("POST", "/api/admin/sigs/import", async (req) => {
-  requireAdmin(req);
-  const b = await readJson(req, 20 * 1024 * 1024);
-  const crew = str(b.crew, 30);
-  if (!db.prepare("SELECT 1 FROM crews WHERE id = ?").get(crew)) fail(400, "크루를 고르세요.");
+// 시그 목록 반영: 같은 이름은 수정, 새 이름은 추가 (이름이 같은 시그가 여럿이면 순서대로 짝지음)
+//   엑셀 업로드와 구글 시트 자동 반영이 같이 씀
+function importSigs(crew, rows0, prune) {
   // 분류도 단가도 없는 줄(메모, 다른 표 등)은 시그가 아니므로 건너뜀
-  const all = (Array.isArray(b.rows) ? b.rows : []).map((r) => ({ ...r, name: str(r.name, 100) })).filter((r) => r.name);
+  const all = (Array.isArray(rows0) ? rows0 : []).map((r) => ({ ...r, name: str(r.name, 100) })).filter((r) => r.name);
   const rows = all.filter((r) => str(r.category) || parsePrice(r.price));
   if (!rows.length) fail(400, "엑셀에서 시그를 찾지 못했습니다. 양식의 제목 줄(시그 이름, 시그단가 …)을 확인하세요.");
 
@@ -664,15 +741,114 @@ route("POST", "/api/admin/sigs/import", async (req) => {
     }
   }));
 
-  if (b.prune) {
+  if (prune) {
     const gone = db.prepare("SELECT id FROM sigs WHERE crew_id = ?").all(crew).map((r) => r.id).filter((id) => !used.has(id));
     for (const id of gone) {
-      removeStored(db.prepare("SELECT file FROM lessons WHERE sig_id = ? AND file IS NOT NULL").all(id).map((r) => `lessons/${r.file}`));
+      removeStored(sigStored("s.id = ?", id));
       db.prepare("DELETE FROM sigs WHERE id = ?").run(id);
     }
     stat.removed = gone.length;
   }
-  return { ok: true, ...stat };
+  return stat;
+}
+
+// 엑셀 업로드
+route("POST", "/api/admin/sigs/import", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req, 20 * 1024 * 1024);
+  const crew = str(b.crew, 30);
+  if (!db.prepare("SELECT 1 FROM crews WHERE id = ?").get(crew)) fail(400, "크루를 고르세요.");
+  return { ok: true, ...importSigs(crew, b.rows, !!b.prune) };
+});
+
+/* 구글 시트 자동 반영 (5분마다 + 지금 가져오기) */
+// 시트에서 지운 시그가 너무 많으면(절반 넘게) 실수일 수 있어서 지우지 않음
+async function syncSheet(crewId) {
+  const c = db.prepare("SELECT id, sheet_url, sheet_prune, sheet_hash FROM crews WHERE id = ?").get(crewId);
+  if (!c?.sheet_url) return null;
+  const save = (result, hash = c.sheet_hash) =>
+    db.prepare("UPDATE crews SET sheet_result = ?, sheet_hash = ?, sheet_synced_at = ? WHERE id = ?").run(JSON.stringify(result), hash, Date.now(), c.id);
+  try {
+    const rows = await sheet.fetchSigRows(c.sheet_url);
+    const hash = crypto.createHash("sha1").update(JSON.stringify([rows, c.sheet_prune])).digest("hex");
+    if (hash === c.sheet_hash) {
+      const prev = JSON.parse(db.prepare("SELECT sheet_result FROM crews WHERE id = ?").get(c.id).sheet_result || "{}");
+      const result = { ...prev, ok: true, unchanged: true, checked_at: Date.now() };
+      save(result, hash);
+      return result;
+    }
+    let prune = !!c.sheet_prune, guarded = false;
+    if (prune) {
+      const names = new Set(rows.map((r) => str(r.name, 100)));
+      const existing = db.prepare("SELECT name FROM sigs WHERE crew_id = ?").all(c.id);
+      const gone = existing.filter((x) => !names.has(x.name)).length;
+      if (existing.length >= 10 && gone > existing.length / 2) { prune = false; guarded = true; }
+    }
+    const stat = importSigs(c.id, rows, prune);
+    const result = { ok: true, ...stat, guarded, changed_at: Date.now(), checked_at: Date.now() };
+    save(result, guarded ? null : hash); // 지우기를 건너뛰었으면 다음에 다시 확인
+    return result;
+  } catch (e) {
+    const result = { ok: false, error: e.message || "시트를 반영하지 못했습니다.", checked_at: Date.now() };
+    save(result);
+    return result;
+  }
+}
+async function syncAllSheets() {
+  for (const c of db.prepare("SELECT id FROM crews WHERE sheet_url IS NOT NULL AND sheet_url != ''").all()) {
+    await syncSheet(c.id).catch((e) => console.error(`[sheet:${c.id}]`, e.message));
+  }
+}
+
+route("GET", "/api/admin/sheets", (req) => {
+  requireAdmin(req);
+  return db.prepare("SELECT id, sheet_url, sheet_prune, sheet_synced_at, sheet_result FROM crews").all()
+    .map((c) => ({ ...c, sheet_result: c.sheet_result ? JSON.parse(c.sheet_result) : null }));
+});
+// 시트 주소 저장 (비우면 자동 반영 끔) → 바로 한 번 가져옴
+route("POST", "/api/admin/sheets/:crew", async (req, p) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  db.prepare("SELECT 1 FROM crews WHERE id = ?").get(p.crew) || fail(404, "크루를 찾을 수 없습니다.");
+  const url = str(b.url, 500);
+  if (url) try { sheet.sheetId(url); } catch (e) { fail(400, e.message); }
+  db.prepare("UPDATE crews SET sheet_url = ?, sheet_prune = ?, sheet_hash = NULL, sheet_result = NULL, sheet_synced_at = NULL WHERE id = ?")
+    .run(url || null, b.prune === false ? 0 : 1, p.crew);
+  return { ok: true, result: url ? await syncSheet(p.crew) : null };
+});
+// 지금 가져오기 (바뀐 게 없어도 다시 반영)
+route("POST", "/api/admin/sheets/:crew/sync", async (req, p) => {
+  requireAdmin(req);
+  db.prepare("UPDATE crews SET sheet_hash = NULL WHERE id = ?").run(p.crew);
+  const result = await syncSheet(p.crew);
+  if (!result) fail(400, "먼저 구글 시트 주소를 저장하세요.");
+  return { ok: true, result };
+});
+
+/* 관리자: 시그 음원 · 시그 이미지 (?kind=audio | image) */
+const ASSET = {
+  image: { re: /\.(png|jpe?g|gif|webp)$/i, label: "이미지(jpg, png, gif, webp)" },
+  audio: { re: /\.(mp3|m4a|wav|ogg|aac|flac)$/i, label: "음원(mp3, m4a, wav, ogg, aac, flac)" },
+};
+route("POST", "/api/admin/sigs/:id/asset", async (req, p, url) => {
+  requireAdmin(req);
+  const kind = url.searchParams.get("kind") === "image" ? "image" : "audio";
+  const sig = db.prepare(`SELECT id, ${kind} AS file FROM sigs WHERE id = ?`).get(Number(p.id)) || fail(404, "시그를 찾을 수 없습니다.");
+  const up = await saveUpload(req, "sigs");
+  if (!ASSET[kind].re.test(up.file)) { removeStored([`sigs/${up.file}`]); fail(400, `${ASSET[kind].label} 파일만 올릴 수 있습니다.`); }
+  removeStored([sig.file && `sigs/${sig.file}`]);
+  db.prepare(`UPDATE sigs SET ${kind} = ?, ${kind}_name = ?, ${kind}_size = ?, ${kind}_crc = ?, updated_at = ? WHERE id = ?`)
+    .run(up.file, up.orig, up.size, up.crc, Date.now(), sig.id);
+  return { ok: true };
+});
+route("POST", "/api/admin/sigs/:id/asset/delete", async (req, p) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  const kind = b.kind === "image" ? "image" : "audio";
+  const sig = db.prepare(`SELECT id, ${kind} AS file FROM sigs WHERE id = ?`).get(Number(p.id)) || fail(404, "시그를 찾을 수 없습니다.");
+  removeStored([sig.file && `sigs/${sig.file}`]);
+  db.prepare(`UPDATE sigs SET ${kind} = NULL, ${kind}_name = NULL, ${kind}_size = 0, ${kind}_crc = 0, updated_at = ? WHERE id = ?`).run(Date.now(), sig.id);
+  return { ok: true };
 });
 
 /* 관리자: 레슨 영상 */
@@ -793,7 +969,7 @@ const TYPES = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8", ".js": "text/javascript; charset=utf-8",
   ".json": "application/json", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
   ".webp": "image/webp", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".mp4": "video/mp4", ".webm": "video/webm",
-  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4",
+  ".mp3": "audio/mpeg", ".wav": "audio/wav", ".ogg": "audio/ogg", ".m4a": "audio/mp4", ".aac": "audio/aac", ".flac": "audio/flac",
   ".mov": "video/quicktime", ".m4v": "video/mp4", ".pdf": "application/pdf", ".zip": "application/zip",
 };
 
@@ -845,6 +1021,17 @@ http.createServer(async (req, res) => {
     return serveFile(res, path.join(DATA_DIR, "uploads", name));
   }
 
+  // 시그 음원 · 시그 이미지 (공개, ?dl=1 이면 원래 파일 이름으로 받기)
+  const sigFile = pathname.match(/^\/media\/sigs\/([a-f0-9]{24}\.[a-z0-9]{1,8})$/i);
+  if (sigFile) {
+    let download;
+    if (url.searchParams.get("dl")) {
+      const r = db.prepare("SELECT name, image, image_name, audio_name FROM sigs WHERE image = ? OR audio = ?").get(sigFile[1], sigFile[1]);
+      if (r) download = `${safeName(r.name)} - ${r.image === sigFile[1] ? "이미지" : "음원"}${path.extname(sigFile[1])}`;
+    }
+    return serveFile(res, path.join(DATA_DIR, "uploads", "sigs", sigFile[1]), { req, download });
+  }
+
   // 멤버 프로필 사진 · 공약 이미지 (공개)
   const memberImg = pathname.match(/^\/media\/members\/([a-f0-9]{24}\.(?:png|jpe?g|gif|webp))$/i);
   if (memberImg) return serveFile(res, path.join(DATA_DIR, "uploads", "members", memberImg[1]), { req });
@@ -868,4 +1055,7 @@ http.createServer(async (req, res) => {
   setInterval(auth.cleanupSessions, 60 * 60 * 1000);
   youtube.startScheduler();
   soop.startScheduler();
+  // 구글 시트 → 시그 목록 (5분마다)
+  setTimeout(syncAllSheets, 10 * 1000);
+  setInterval(syncAllSheets, 5 * 60 * 1000);
 });

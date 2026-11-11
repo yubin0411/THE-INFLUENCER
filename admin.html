@@ -134,6 +134,19 @@
           <label class="field inline-field">크루<select class="crew-pick" id="sig-crew"></select></label>
         </div>
 
+        <div class="box sheet-box">
+          <h3>구글 시트 자동 반영</h3>
+          <p class="hint">시그 시트 주소를 넣어 두면 <b>5분마다 시트를 확인해서 바뀐 내용을 자동으로 반영</b>합니다. 바로 반영하려면 [지금 가져오기]를 누르세요.<br>
+            시트 공유가 <b>"링크가 있는 모든 사용자 → 뷰어"</b>여야 하고, 첫 번째 탭을 읽습니다. 칸 규칙은 아래 엑셀 업로드와 같습니다.</p>
+          <form class="inline-form" id="sheet-form">
+            <label class="field grow">구글 시트 주소<input name="url" type="url" placeholder="https://docs.google.com/spreadsheets/d/…"></label>
+            <label class="check"><input type="checkbox" name="prune" checked> 시트에서 지운 시그는 사이트에서도 삭제</label>
+            <button class="primary-btn" type="submit">저장</button>
+            <button class="ghost-btn" type="button" id="sheet-sync">지금 가져오기</button>
+          </form>
+          <p class="sheet-status" id="sheet-status"></p>
+        </div>
+
         <div class="box">
           <h3>엑셀로 한 번에 올리기</h3>
           <p class="hint">양식 칸: <b>제외 · 분류 · 시그 이름 · 시그단가 · 유튜브 레퍼런스 · 레슨 영상</b> — 구글 시트에서 <b>파일 → 다운로드 → Microsoft Excel(.xlsx)</b>로 받은 파일을 그대로 올리면 됩니다.<br>

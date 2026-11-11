@@ -215,3 +215,18 @@ a.lesson-title:hover { text-decoration: underline; }
 .ed-actions { display: flex; align-items: center; gap: 8px; position: sticky; bottom: -26px; background: var(--surface); padding: 12px 0 4px; }
 .ed-actions .form-note { flex: 1; margin: 0; }
 @media (max-width: 640px) { .ed-grid, .ed-links { grid-template-columns: minmax(0, 1fr); } }
+
+/* 구글 시트 자동 반영 */
+.sheet-box { border-color: color-mix(in srgb, #1e8e3e 45%, var(--line)); }
+.sheet-status { margin: 10px 0 0; font-size: 13px; color: var(--muted); }
+.sheet-status b.ok { color: #12a150; }
+.sheet-status b.err { color: var(--accent); }
+
+/* 시그 이미지 · 음원 */
+.asset-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.asset { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; background: var(--surface-2); font-size: 13px; }
+.asset strong { flex: none; min-width: 64px; }
+.asset-img { width: 64px; height: 64px; border-radius: 8px; object-fit: cover; display: grid; place-items: center; background: var(--surface); color: var(--muted); font-size: 12px; }
+.asset audio { height: 32px; max-width: 220px; }
+.asset-tools { display: flex; gap: 6px; margin-left: auto; }
+@media (max-width: 760px) { .asset-row { grid-template-columns: minmax(0, 1fr); } }

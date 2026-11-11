@@ -178,7 +178,7 @@
           </td>
         </tr>`).join("")
       : `<tr><td colspan="4"><div class="empty">크루가 없습니다.</div></td></tr>`;
-    await Promise.all([loadSigs(), loadFiles()]);
+    await Promise.all([loadSigs(), loadFiles(), loadSheets()]);
   }
 
   $("#crew-form").addEventListener("submit", async (e) => {
@@ -283,12 +283,30 @@
             <input class="cell-input" name="ref_url" value="${esc(s.ref_url)}" placeholder="유튜브 레퍼런스" aria-label="유튜브 레퍼런스">
             <label class="check"><input type="checkbox" name="hidden" ${s.hidden ? "checked" : ""}> 숨김</label>
             <div class="actions">
-              <button type="button" class="mini-action ${wait ? "warn" : ""}" data-lessons aria-expanded="${open}">레슨 ${ready}${wait ? ` · 대기 ${wait}` : ""}</button>
+              <button type="button" class="mini-action ${wait ? "warn" : ""}" data-lessons aria-expanded="${open}">레슨 ${ready}${wait ? ` · 대기 ${wait}` : ""}${s.image ? " · 이미지" : ""}${s.audio ? " · 음원" : ""}</button>
               <button type="button" class="mini-action ok" data-save>저장</button>
               <button type="button" class="mini-action danger" data-delete>삭제</button>
             </div>
           </div>
           <div class="lesson-box" ${open ? "" : "hidden"}>
+            <div class="asset-row">
+              <div class="asset">
+                <strong>시그 이미지</strong>
+                ${s.image ? `<a href="/media/sigs/${esc(s.image)}" target="_blank" rel="noopener"><img class="asset-img" src="/media/sigs/${esc(s.image)}" alt=""></a>` : '<span class="asset-img empty-img">없음</span>'}
+                <span class="asset-tools">
+                  <label class="mini-action file-btn">${s.image ? "바꾸기" : "이미지 올리기"}<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" data-asset="image" hidden></label>
+                  ${s.image ? '<button type="button" class="mini-action danger" data-asset-del="image">삭제</button>' : ""}
+                </span>
+              </div>
+              <div class="asset">
+                <strong>음원</strong>
+                ${s.audio ? `<audio controls preload="none" src="/media/sigs/${esc(s.audio)}"></audio><span class="muted">${esc(s.audio_name)} · ${fmtSize(s.audio_size)}</span>` : '<span class="muted">없음</span>'}
+                <span class="asset-tools">
+                  <label class="mini-action file-btn">${s.audio ? "바꾸기" : "음원 올리기"}<input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac,.flac" data-asset="audio" hidden></label>
+                  ${s.audio ? '<button type="button" class="mini-action danger" data-asset-del="audio">삭제</button>' : ""}
+                </span>
+              </div>
+            </div>
             ${s.items.length ? `<ul class="lesson-list">${s.items.map(lessonHtml).join("")}</ul>` : '<p class="hint">등록된 레슨 영상이 없습니다.</p>'}
             <div class="lesson-add">
               <input class="cell-input" name="lesson_url" placeholder="유튜브 · 구글 드라이브 링크">
@@ -339,6 +357,10 @@
       if (!confirmClick(btn)) return;
       return act(btn, async () => { await api(`api/admin/sigs/${id}/delete`, {}); await loadSigs(); });
     }
+    if (btn.dataset.assetDel) {
+      if (!confirmClick(btn)) return;
+      return act(btn, async () => { await api(`api/admin/sigs/${id}/asset/delete`, { kind: btn.dataset.assetDel }); note.textContent = "삭제했습니다."; await loadSigs(); });
+    }
     if (btn.hasAttribute("data-save")) {
       const v = (n) => $(`[name="${n}"]`, card);
       return act(btn, async () => {
@@ -369,10 +391,13 @@
     const file = input.files[0];
     const note = $("#sig-note");
     const q = input.dataset.fill ? `?lesson=${input.dataset.fill}` : "";
+    const target = input.dataset.asset
+      ? `api/admin/sigs/${card.dataset.sig}/asset?kind=${input.dataset.asset}`
+      : `api/admin/sigs/${card.dataset.sig}/lessons/upload${q}`;
     $$("input[type=file]", card).forEach((i) => (i.disabled = true));
     note.textContent = `${file.name} 올리는 중… (${fmtSize(file.size)})`;
     try {
-      await upload(`api/admin/sigs/${card.dataset.sig}/lessons/upload${q}`, file, $(".progress", card));
+      await upload(target, file, $(".progress", card));
       note.textContent = `${file.name} 올리기 완료`;
       await loadSigs();
     } catch (err) {
@@ -396,15 +421,63 @@
   });
 
   // 제목 줄(시그 이름 …)을 찾아서 칸 위치를 맞춤 → 칸 순서가 달라도 됨
+  /* 구글 시트 자동 반영 */
+  let sheets = [];
+  const sheetSummary = (r) => {
+    if (!r) return "";
+    if (!r.ok) return `<b class="err">반영 실패</b> · ${esc(r.error)}`;
+    const parts = [`추가 ${r.added}`, `수정 ${r.updated}`, r.removed ? `삭제 ${r.removed}` : "", r.hidden ? `숨김 ${r.hidden}` : "",
+      r.lessons ? `레슨 링크 ${r.lessons}` : "", r.pending ? `파일 대기 ${r.pending}` : ""].filter(Boolean).join(" · ");
+    return `<b class="ok">반영됨</b> · ${parts}${r.changed_at ? ` (${fmtAgo(r.changed_at)} 바뀐 내용 반영)` : ""}`
+      + (r.guarded ? ` · <b class="err">시트에서 절반 넘게 사라져서 삭제는 하지 않았어요. 시트를 확인하세요.</b>` : "");
+  };
+  function renderSheet() {
+    const c = sheets.find((x) => x.id === sigCrew());
+    const form = $("#sheet-form");
+    form.elements.url.value = c?.sheet_url || "";
+    form.elements.prune.checked = c ? !!c.sheet_prune : true;
+    $("#sheet-sync").disabled = !c?.sheet_url;
+    $("#sheet-status").innerHTML = !c?.sheet_url
+      ? "자동 반영 꺼짐 (시트 주소가 없습니다)"
+      : `마지막 확인 ${c.sheet_synced_at ? fmtAgo(c.sheet_synced_at) : "-"} · ${sheetSummary(c.sheet_result)}`;
+  }
+  async function loadSheets() {
+    try { sheets = await api("api/admin/sheets"); } catch { sheets = []; }
+    renderSheet();
+  }
+  $("#sheet-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const f = e.target.elements;
+    act($('[type="submit"]', e.target), async () => {
+      $("#sheet-status").textContent = f.url.value ? "시트 받아서 반영하는 중…" : "저장 중…";
+      try {
+        await api(`api/admin/sheets/${encodeURIComponent(sigCrew())}`, { url: f.url.value, prune: f.prune.checked });
+        await Promise.all([loadSheets(), loadSigs()]);
+      } catch (err) { $("#sheet-status").textContent = err.message; }
+    });
+  });
+  $("#sheet-sync").addEventListener("click", (e) => act(e.currentTarget, async () => {
+    $("#sheet-status").textContent = "시트 받아서 반영하는 중…";
+    try {
+      await api(`api/admin/sheets/${encodeURIComponent(sigCrew())}/sync`, {});
+      await Promise.all([loadSheets(), loadSigs()]);
+    } catch (err) { $("#sheet-status").textContent = err.message; }
+  }));
+  $("#sig-crew").addEventListener("change", renderSheet);
+
+  // 서버(lib/sheet.js extractRows)와 같은 규칙: 시그 표 + 신호탄 표(맴버 · 금액 · 링크)
   async function readExcel(file) {
     const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
     const ws = wb.Sheets[wb.SheetNames[0]];
     if (!ws?.["!ref"]) return [];
     const range = XLSX.utils.decode_range(ws["!ref"]);
-    const cell = (r, c) => (c === undefined ? undefined : ws[XLSX.utils.encode_cell({ r, c })]);
-    const text = (r, c) => { const x = cell(r, c); return x ? String(x.w ?? x.v ?? "").trim() : ""; };
+    const raw = (r, c) => (c === undefined ? undefined : ws[XLSX.utils.encode_cell({ r, c })]);
+    const cell = (r, c) => { const x = raw(r, c); return x && { v: x.w ?? x.v ?? "", n: x.v, link: x.l?.Target }; };
+    const text = (r, c) => String(cell(r, c)?.v ?? "").trim();
     const MATCH = { exclude: /제외/, category: /분류/, name: /이름/, price: /단가|가격/, ref: /레퍼런스|유튜브/, lessons: /레슨/ };
-
+    const SIGNAL = { name: /^(맴버|멤버)(이름)?$/, price: /금액|단가|가격/, ref: /링크|신호탄|음원/ };
+    const rows = [];
+    let mainName;
     for (let head = range.s.r; head <= Math.min(range.e.r, range.s.r + 20); head++) {
       const cols = {};
       for (let c = range.s.c; c <= range.e.c; c++) {
@@ -412,26 +485,42 @@
         for (const [key, re] of Object.entries(MATCH)) if (cols[key] === undefined && re.test(t)) { cols[key] = c; break; }
       }
       if (cols.name === undefined) continue;
-      const rows = [];
+      mainName = cols.name;
       for (let r = head + 1; r <= range.e.r; r++) {
         const name = text(r, cols.name);
         if (!name) continue;
-        const ref = cell(r, cols.ref);
-        const lessons = cell(r, cols.lessons);
         rows.push({
           exclude: text(r, cols.exclude),
           category: text(r, cols.category),
           name,
-          price: cell(r, cols.price)?.v ?? "",
-          ref: text(r, cols.ref) || ref?.l?.Target || "",
+          price: cell(r, cols.price)?.n ?? "",
+          ref: text(r, cols.ref) || cell(r, cols.ref)?.link || "",
           lessons: text(r, cols.lessons),
-          lessonLink: lessons?.l?.Target || "",
+          lessonLink: cell(r, cols.lessons)?.link || "",
         });
       }
-      return rows;
+      break;
     }
-    return [];
+    for (let head = range.s.r; head <= Math.min(range.e.r, range.s.r + 20); head++) {
+      for (let c = range.s.c; c <= range.e.c; c++) {
+        if (c === mainName || !SIGNAL.name.test(text(head, c).replace(/\s/g, ""))) continue;
+        const right = (re) => { for (let x = c + 1; x <= Math.min(range.e.c, c + 4); x++) if (re.test(text(head, x).replace(/\s/g, ""))) return x; };
+        const pc = right(SIGNAL.price), lc = right(SIGNAL.ref);
+        if (pc === undefined) continue;
+        const category = (head > range.s.r && text(head - 1, c)) || "신호탄";
+        for (let r = head + 1; r <= range.e.r; r++) {
+          const name = text(r, c);
+          if (!name) break;
+          const t = lc === undefined ? "" : text(r, lc);
+          rows.push({ exclude: "", category, name, price: cell(r, pc)?.n ?? "",
+            ref: (/^https?:\/\//i.test(t) ? t : "") || (lc === undefined ? "" : cell(r, lc)?.link || ""), lessons: "", lessonLink: "" });
+        }
+        return rows;
+      }
+    }
+    return rows;
   }
+
 
   $("#excel-form").addEventListener("submit", async (e) => {
     e.preventDefault();

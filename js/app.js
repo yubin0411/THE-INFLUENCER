@@ -481,30 +481,53 @@
 
     if (page === "price") {
       const cats = [...new Set(crewSigs().map((s) => s.category).filter(Boolean))];
+      const hasImages = crewSigs().some((s) => s.image_url);
+      const hasFiles = crewSigs().some((s) => s.image_url || s.audio_url);
       let cat = "";
+      let view = hasImages ? "image" : "table";
       $("#page-tools").innerHTML = `
         <label class="search"><span class="sr-only">시그 검색</span><input type="search" placeholder="시그 이름 · 단가 검색"></label>
         <label class="select"><span class="sr-only">정렬</span>
           <select><option value="sheet">기본 순서</option><option value="low">단가 낮은 순</option><option value="high">단가 높은 순</option><option value="new">최신 등록 순</option></select>
-        </label>`;
+        </label>
+        <div class="view-toggle" role="group" aria-label="보기 방식">
+          <button type="button" data-view-mode="image" class="${view === "image" ? "is-active" : ""}">이미지</button>
+          <button type="button" data-view-mode="table" class="${view === "table" ? "is-active" : ""}">표</button>
+        </div>
+        ${hasFiles ? `<a class="primary-btn" id="sig-zip" href="#">한 번에 다운로드</a>` : ""}`;
       body.innerHTML = `
         ${cats.length > 1 ? `<div class="chips cat-chips">${["", ...cats].map((c) => `<button type="button" class="chip ${c ? "" : "is-active"}" data-cat="${esc(c)}">${c ? esc(c) : "전체"}</button>`).join("")}</div>` : ""}
+        <div class="sig-image-grid" hidden></div>
         <div class="table-wrap"><table class="sig-table">
           <thead><tr><th>분류</th><th>시그 이름</th><th class="num">시그단가</th><th class="center">레퍼런스 · 레슨</th></tr></thead>
           <tbody></tbody>
         </table></div>
         <nav class="pagination" aria-label="가격표 페이지"></nav>`;
       const sortSel = $("#page-tools select");
+      const zip = $("#sig-zip");
+      const zipHref = () => `api/sigs/download?crew=${encodeURIComponent(crew)}${cat ? `&category=${encodeURIComponent(cat)}` : ""}`;
+      if (zip) zip.href = zipHref();
       const render = sigTable({
         search: $("#page-tools input"), body: $("tbody", body), pager: $(".pagination", body),
         rows: () => crewSigs().filter((s) => !cat || s.category === cat), sort: () => sortSel.value,
+        grid: () => (view === "image" ? $(".sig-image-grid", body) : null),
       });
+      const setView = (v) => {
+        view = v;
+        $$("[data-view-mode]").forEach((b) => b.classList.toggle("is-active", b.dataset.viewMode === v));
+        $(".sig-image-grid", body).hidden = v !== "image";
+        $(".table-wrap", body).hidden = v === "image";
+        render();
+      };
+      $$("[data-view-mode]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.viewMode)));
       sortSel.addEventListener("change", render);
       $$("[data-cat]", body).forEach((b) => b.addEventListener("click", () => {
         cat = b.dataset.cat;
         $$("[data-cat]", body).forEach((x) => x.classList.toggle("is-active", x === b));
+        if (zip) zip.href = zipHref();
         render();
       }));
+      setView(view);
     } else if (page === "sigs") {
       const groups = new Map();
       for (const s of crewSigs()) {
@@ -697,6 +720,16 @@
   const sigBadges = (s) =>
     `${s.ref_url ? '<span class="pill">레퍼런스</span>' : ""}${s.lessons ? `<span class="pill on">레슨 ${s.lessons}</span>` : ""}`;
 
+  // 가격표 이미지 보기: 시그 이미지가 있으면 이미지, 없으면 글자 카드
+  const sigImageCard = (s) => `
+    <button type="button" class="sig-image-card ${s.image_url ? "" : "no-image"}" data-sig-open="${s.id}">
+      ${s.image_url
+        ? `<img src="${esc(s.image_url)}" alt="${esc(s.name)} ${won(s.price)}" loading="lazy">`
+        : `<span class="sig-image-text"><span class="cat">${esc(s.category)}</span><strong>${esc(s.name)}</strong><span class="sig-price">${won(s.price)}</span></span>`}
+      ${isNew(s.created_at) ? '<span class="badge-new">NEW</span>' : ""}
+      ${s.audio_url ? '<span class="has-audio" title="음원 있음">♪</span>' : ""}
+    </button>`;
+
   const sigCard = (s, showDate) => `
     <button type="button" class="sig-card" data-sig-open="${s.id}">
       <strong>${esc(s.name)} ${isNew(s.created_at) ? '<span class="badge-new">NEW</span>' : ""}</strong>
@@ -705,7 +738,7 @@
     </button>`;
 
   // 검색 + 페이지 나누기가 있는 시그 표 (홈의 "새로 들어온 시그", 크루별 "전체 가격표")
-  function sigTable({ search, body, pager, rows, sort = () => "sheet", showCrew = false }) {
+  function sigTable({ search, body, pager, rows, sort = () => "sheet", showCrew = false, grid = () => null }) {
     let page = 1;
     const render = () => {
       const q = search.value.trim().toLowerCase().replace(/,/g, "");
@@ -716,6 +749,8 @@
       page = Math.min(page, pages);
       const shown = list.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+      const g = grid();
+      if (g) g.innerHTML = shown.length ? shown.map(sigImageCard).join("") : empty(q ? "검색 결과가 없습니다." : "등록된 시그가 없습니다.");
       body.innerHTML = shown.length
         ? shown.map((s) => `
           <tr class="clickable" data-sig-open="${s.id}">
@@ -773,8 +808,20 @@
               ${l.title ? `<figcaption>${esc(l.title)}</figcaption>` : ""}
             </figure>`).join("")
         : `<p class="hint">아직 올라온 레슨 영상이 없습니다.</p>`;
-    $("#sig-media").innerHTML = `
-      <section><h3>유튜브 레퍼런스</h3>${s.ref_url ? player(s.ref_url, s.name) : '<p class="hint">등록된 레퍼런스가 없습니다.</p>'}</section>
+    const files = s.image_url || s.audio_url
+      ? `<section class="sig-files">
+           ${s.image_url ? `<a class="sig-modal-img" href="${esc(s.image_url)}" target="_blank" rel="noopener"><img src="${esc(s.image_url)}" alt="${esc(s.name)} 시그 이미지"></a>` : ""}
+           <div class="sig-file-tools">
+             ${s.audio_url ? `<audio controls preload="metadata" src="${esc(s.audio_url)}"></audio>` : ""}
+             <div class="sig-dl">
+               ${s.audio_url ? `<a class="primary-btn" href="${esc(s.audio_url)}?dl=1" download>음원 받기 <small>${fmtSize(s.audio_size)}</small></a>` : ""}
+               ${s.image_url ? `<a class="ghost-btn" href="${esc(s.image_url)}?dl=1" download>이미지 받기 <small>${fmtSize(s.image_size)}</small></a>` : ""}
+             </div>
+           </div>
+         </section>`
+      : "";
+    $("#sig-media").innerHTML = `${files}
+      <section><h3>${s.category === "신호탄" ? "신호탄" : "유튜브 레퍼런스"}</h3>${s.ref_url ? player(s.ref_url, s.name) : '<p class="hint">등록된 레퍼런스가 없습니다.</p>'}</section>
       <section><h3>레슨 영상 ${s.items.length > 1 ? `<span class="muted">${s.items.length}</span>` : ""}</h3>${lessons}</section>`;
     if (!$("#modal-sig").open) $("#modal-sig").showModal();
   }
