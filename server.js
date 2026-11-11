@@ -11,7 +11,7 @@ const { DatabaseSync } = require("node:sqlite");
 
 loadEnv();
 
-const { db, tx, DATA_DIR } = require("./lib/db");
+const { db, tx, DATA_DIR, linkMembers } = require("./lib/db");
 const auth = require("./lib/auth");
 const youtube = require("./lib/youtube");
 const soop = require("./lib/soop");
@@ -74,7 +74,8 @@ function throttle(req) {
 }
 
 const videoFields = `v.id, v.type, v.live, v.title, v.thumb, v.published_at, v.duration, v.views, v.viewers,
-  c.id AS channel_id, COALESCE(NULLIF(c.name, ''), c.title) AS member, c.crew_id AS crew`;
+  c.id AS channel_id, COALESCE(mb.name, c.title) AS member, mb.id AS member_id, mb.crew_id AS crew`;
+const videoFrom = "videos v JOIN channels c ON c.id = v.channel_id LEFT JOIN members mb ON mb.id = c.member_id";
 
 /* ---------- 라우트 ---------- */
 const routes = [];
@@ -87,19 +88,38 @@ const route = (method, pattern, handler) => {
 // 사이트 기본 정보
 route("GET", "/api/site", (req) => ({
   crews: db.prepare("SELECT id, name FROM crews ORDER BY sort, name").all(),
-  // 멤버: 유튜브 채널 + SOOP 방송국 (연결된 것은 한 사람으로)
-  members: broadcasts.members().map((m) => ({ id: m.id, name: m.name, crew: m.crew, thumb: m.thumb, handle: m.handle, youtube: m.youtube, soop: m.soop, is_live: m.is_live })),
+  members: publicMembers(),
   user: auth.currentUser(req),
 }));
 
+// 멤버 (유튜브 · SOOP · 인스타 · 프로필 · 공약 · 대표 시그)
+function publicMembers() {
+  const live = new Map(broadcasts.members().map((m) => [m.id, m]));
+  const channels = db.prepare("SELECT id, handle, member_id FROM channels ORDER BY created_at").all();
+  const soops = db.prepare("SELECT id, member_id FROM soop_channels ORDER BY created_at").all();
+  return db.prepare("SELECT * FROM members ORDER BY sort, name").all().map((r) => {
+    const m = live.get(String(r.id));
+    return {
+      id: String(r.id), name: r.name, crew: r.crew_id, role_title: r.role_title, quote: r.quote,
+      thumb: m.thumb, photo: broadcasts.photoUrl(r.photo), handle: m.handle, youtube: m.youtube, soop: m.soop,
+      youtubes: channels.filter((c) => c.member_id === r.id).map((c) => ({ id: c.id, handle: c.handle })),
+      soops: soops.filter((c) => c.member_id === r.id).map((c) => c.id),
+      instagram: r.instagram, kakao: r.kakao, profile_text: r.profile_text,
+      promise_text: r.promise_text, promise_image: broadcasts.photoUrl(r.promise_image),
+      sig_ids: JSON.parse(r.sig_ids || "[]"),
+      is_live: m.is_live, yt_live: m.yt_live, soop_live: m.soop_live,
+    };
+  });
+}
+
 // 라이브 (등록된 유튜브 채널 + SOOP 방송국)
 route("GET", "/api/live", () => {
-  const yt = db.prepare(`SELECT ${videoFields} FROM videos v JOIN channels c ON c.id = v.channel_id WHERE v.live = 'live'`).all()
+  const yt = db.prepare(`SELECT ${videoFields} FROM ${videoFrom} WHERE v.live = 'live'`).all()
     .map((v) => ({ ...v, platform: "youtube", url: `https://www.youtube.com/watch?v=${v.id}` }));
   const sp = broadcasts.members().filter((m) => m.soop_live).map((m) => ({
     id: `soop-${m.soop_broad}`, platform: "soop", title: m.soop_title || `${m.name} 방송 중`,
     thumb: `https://liveimg.sooplive.co.kr/m/${m.soop_broad}`, viewers: m.soop_viewers,
-    channel_id: m.id, member: m.name, crew: m.crew, url: `https://play.sooplive.co.kr/${m.soop}/${m.soop_broad}`,
+    channel_id: m.id, member: m.name, crew: m.crew, url: `https://play.sooplive.co.kr/${m.soop_station}/${m.soop_broad}`,
   }));
   return { live: [...yt, ...sp].sort((a, b) => b.viewers - a.viewers) };
 });
@@ -116,28 +136,28 @@ route("GET", "/api/ranking/sessions", (req, _p, url) => {
 });
 
 // 게시글/쇼츠 목록 (누적, 최신순, before 로 더 불러오기)
-//   channel=UC...  → 그 계정 영상만
+//   member=멤버ID  → 그 멤버의 영상만
 //   latest=1       → 계정마다 가장 최근 영상 1개씩 (홈 화면용)
 route("GET", "/api/videos", (req, _p, url) => {
   const type = url.searchParams.get("type") === "short" ? "short" : "post";
   const crew = url.searchParams.get("crew");
-  const channel = url.searchParams.get("channel");
+  const member = Number(url.searchParams.get("member")) || null;
   const latest = url.searchParams.get("latest") === "1";
   const before = Number(url.searchParams.get("before")) || Number.MAX_SAFE_INTEGER;
   const limit = Math.min(Number(url.searchParams.get("limit")) || 20, 60);
   const where = ["v.type = ?", "v.live = 'none'"];
   const args = [type];
-  if (crew) where.push("c.crew_id = ?"), args.push(crew);
-  if (channel) where.push("c.id = ?"), args.push(channel);
+  if (crew) where.push("mb.crew_id = ?"), args.push(crew);
+  if (member) where.push("c.member_id = ?"), args.push(member);
   const rows = latest
     ? db.prepare(`
         SELECT * FROM (
           SELECT ${videoFields}, ROW_NUMBER() OVER (PARTITION BY v.channel_id ORDER BY v.published_at DESC) AS rn
-          FROM videos v JOIN channels c ON c.id = v.channel_id WHERE ${where.join(" AND ")}
+          FROM ${videoFrom} WHERE ${where.join(" AND ")}
         ) WHERE rn = 1 AND published_at < ? ORDER BY published_at DESC LIMIT ?
       `).all(...args, before, limit + 1)
     : db.prepare(`
-        SELECT ${videoFields} FROM videos v JOIN channels c ON c.id = v.channel_id
+        SELECT ${videoFields} FROM ${videoFrom}
         WHERE ${where.join(" AND ")} AND v.published_at < ?
         ORDER BY v.published_at DESC LIMIT ?
       `).all(...args, before, limit + 1);
@@ -147,7 +167,7 @@ route("GET", "/api/videos", (req, _p, url) => {
 // 자세히 보기
 route("GET", "/api/videos/:id", (req, p) => {
   const v = db.prepare(`SELECT ${videoFields}, v.description, v.likes, c.title AS channel_title, c.thumb AS channel_thumb
-    FROM videos v JOIN channels c ON c.id = v.channel_id WHERE v.id = ?`).get(p.id);
+    FROM ${videoFrom} WHERE v.id = ?`).get(p.id);
   return v || fail(404, "영상을 찾을 수 없습니다.");
 });
 
@@ -310,74 +330,158 @@ route("POST", "/api/admin/crews/:id/delete", (req, p) => {
   return { ok: true };
 });
 
-route("GET", "/api/admin/channels", (req) => {
+/* 관리자: 멤버 (유튜브 채널 · SOOP 방송국 · 프로필 · 공약 · 대표 시그) */
+const memberRow = (id) => db.prepare("SELECT * FROM members WHERE id = ?").get(Number(id)) || fail(404, "멤버를 찾을 수 없습니다.");
+const linkUrl = (v) => {
+  const u = str(v, 300);
+  if (u && !/^https?:\/\//i.test(u)) fail(400, "링크는 https:// 로 시작하는 주소를 넣으세요.");
+  return u;
+};
+
+route("GET", "/api/admin/members", (req) => {
   requireAdmin(req);
-  return db.prepare(`SELECT c.*, (SELECT COUNT(*) FROM videos v WHERE v.channel_id = c.id AND v.type = 'post') AS posts,
+  const live = new Map(broadcasts.members().map((m) => [m.id, m]));
+  const channels = db.prepare(`SELECT c.id, c.title, c.handle, c.thumb, c.member_id, c.synced_at,
+    (SELECT COUNT(*) FROM videos v WHERE v.channel_id = c.id AND v.type = 'post') AS posts,
     (SELECT COUNT(*) FROM videos v WHERE v.channel_id = c.id AND v.type = 'short') AS shorts,
     EXISTS (SELECT 1 FROM videos v WHERE v.channel_id = c.id AND v.live = 'live') AS is_live
-    FROM channels c ORDER BY c.created_at DESC`).all();
+    FROM channels c ORDER BY c.created_at`).all();
+  const soops = db.prepare("SELECT id, nick, thumb, member_id, live, title, checked_at FROM soop_channels ORDER BY created_at").all();
+  return db.prepare("SELECT * FROM members ORDER BY sort, name").all().map((r) => ({
+    ...r,
+    sig_ids: JSON.parse(r.sig_ids || "[]"),
+    photo_url: broadcasts.photoUrl(r.photo),
+    promise_url: broadcasts.photoUrl(r.promise_image),
+    thumb: live.get(String(r.id))?.thumb || null,
+    is_live: !!live.get(String(r.id))?.is_live,
+    youtubes: channels.filter((c) => c.member_id === r.id),
+    soops: soops.filter((c) => c.member_id === r.id),
+  }));
 });
 
-route("POST", "/api/admin/channels", async (req) => {
+// 멤버 만들기 / 고치기 (id 가 있으면 수정)
+route("POST", "/api/admin/members", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  const name = str(b.name, 30) || fail(400, "멤버 이름을 입력하세요.");
+  const crew = str(b.crew, 30) || null;
+  if (crew && !db.prepare("SELECT 1 FROM crews WHERE id = ?").get(crew)) fail(400, "없는 크루입니다.");
+  const sigIds = [...new Set((Array.isArray(b.sig_ids) ? b.sig_ids : []).map(Number).filter(Number.isInteger))].slice(0, 100);
+  const vals = {
+    name, crew_id: crew, role_title: str(b.role_title, 30), quote: str(b.quote, 100),
+    instagram: linkUrl(b.instagram), kakao: linkUrl(b.kakao),
+    profile_text: str(b.profile_text, 3000), promise_text: str(b.promise_text, 3000),
+    sig_ids: JSON.stringify(sigIds), updated_at: Date.now(),
+  };
+  if (b.id) {
+    memberRow(b.id);
+    const sort = b.sort === "" || b.sort == null ? null : Number(b.sort) || 0;
+    db.prepare(`UPDATE members SET name = :name, crew_id = :crew_id, role_title = :role_title, quote = :quote, instagram = :instagram,
+      kakao = :kakao, profile_text = :profile_text, promise_text = :promise_text, sig_ids = :sig_ids, updated_at = :updated_at,
+      sort = COALESCE(:sort, sort) WHERE id = :id`).run({ ...vals, sort, id: Number(b.id) });
+    return { ok: true, id: Number(b.id) };
+  }
+  const sort = (db.prepare("SELECT MAX(sort) AS m FROM members").get().m ?? 0) + 1;
+  const r = db.prepare(`INSERT INTO members (name, crew_id, role_title, quote, instagram, kakao, profile_text, promise_text, sig_ids, sort, created_at, updated_at)
+    VALUES (:name, :crew_id, :role_title, :quote, :instagram, :kakao, :profile_text, :promise_text, :sig_ids, :sort, :updated_at, :updated_at)`).run({ ...vals, sort });
+  return { ok: true, id: Number(r.lastInsertRowid) };
+});
+
+// 멤버 삭제: 연결된 유튜브 채널(영상 포함) · SOOP 방송국도 같이 지움. 방송 기록은 남음
+route("POST", "/api/admin/members/:id/delete", (req, p) => {
+  requireAdmin(req);
+  const m = memberRow(p.id);
+  removeStored([m.photo && `members/${m.photo}`, m.promise_image && `members/${m.promise_image}`]);
+  tx(() => {
+    db.prepare("DELETE FROM channels WHERE member_id = ?").run(m.id);
+    db.prepare("DELETE FROM soop_channels WHERE member_id = ?").run(m.id);
+    db.prepare("DELETE FROM members WHERE id = ?").run(m.id);
+  });
+  return { ok: true };
+});
+
+// 순서 변경: 바로 앞/뒤 멤버와 자리 바꾸기
+route("POST", "/api/admin/members/:id/move", async (req, p) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  const ids = db.prepare("SELECT id FROM members ORDER BY sort, name").all().map((r) => r.id);
+  const i = ids.indexOf(Number(p.id));
+  if (i < 0) fail(404, "멤버를 찾을 수 없습니다.");
+  const j = i + (Number(b.dir) < 0 ? -1 : 1);
+  if (j < 0 || j >= ids.length) return { ok: true };
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  const set = db.prepare("UPDATE members SET sort = ? WHERE id = ?");
+  tx(() => ids.forEach((id, n) => set.run(n + 1, id)));
+  return { ok: true };
+});
+
+// 프로필 사진 / 공약 이미지 올리기 (?kind=photo | promise), 지우기
+const IMAGE_EXT = /\.(png|jpe?g|gif|webp)$/i;
+route("POST", "/api/admin/members/:id/image", async (req, p, url) => {
+  requireAdmin(req);
+  const m = memberRow(p.id);
+  const col = url.searchParams.get("kind") === "promise" ? "promise_image" : "photo";
+  const up = await saveUpload(req, "members");
+  if (!IMAGE_EXT.test(up.file) || up.size > 20 * 1024 * 1024) {
+    removeStored([`members/${up.file}`]);
+    fail(400, "이미지(jpg, png, gif, webp) 20MB 이하만 올릴 수 있습니다.");
+  }
+  removeStored([m[col] && `members/${m[col]}`]);
+  db.prepare(`UPDATE members SET ${col} = ?, updated_at = ? WHERE id = ?`).run(up.file, Date.now(), m.id);
+  return { ok: true };
+});
+route("POST", "/api/admin/members/:id/image/delete", async (req, p) => {
+  requireAdmin(req);
+  const m = memberRow(p.id);
+  const b = await readJson(req);
+  const col = b.kind === "promise" ? "promise_image" : "photo";
+  removeStored([m[col] && `members/${m[col]}`]);
+  db.prepare(`UPDATE members SET ${col} = NULL, updated_at = ? WHERE id = ?`).run(Date.now(), m.id);
+  return { ok: true };
+});
+
+// 유튜브 채널 연결 (등록하면서 과거 영상도 가져옴)
+route("POST", "/api/admin/members/:id/youtube", async (req, p) => {
   requireAdmin(req);
   if (!process.env.YOUTUBE_API_KEY) fail(503, "YOUTUBE_API_KEY 가 설정되지 않았습니다.");
+  const m = memberRow(p.id);
   const b = await readJson(req);
   const ch = await youtube.resolveChannel(b.channel).catch((e) => fail(400, e.message));
-  if (db.prepare("SELECT 1 FROM channels WHERE id = ?").get(ch.id)) fail(409, `이미 등록된 채널입니다: ${ch.title}`);
-  db.prepare("INSERT INTO channels (id, title, handle, thumb, name, crew_id, uploads, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-    .run(ch.id, ch.title, ch.handle, ch.thumb, str(b.name, 30), str(b.crew, 30) || null, ch.uploads, Date.now());
+  const owner = db.prepare("SELECT m.name FROM channels c LEFT JOIN members m ON m.id = c.member_id WHERE c.id = ?").get(ch.id);
+  if (owner) fail(409, `이미 등록된 채널입니다: ${ch.title}${owner.name ? ` (${owner.name})` : ""}`);
+  db.prepare("INSERT INTO channels (id, title, handle, thumb, name, crew_id, uploads, member_id, created_at) VALUES (?, ?, ?, ?, '', NULL, ?, ?, ?)")
+    .run(ch.id, ch.title, ch.handle, ch.thumb, ch.uploads, m.id, Date.now());
   const count = await youtube.backfillChannel(ch);
   await youtube.quickPoll().catch(() => {});
-  return { ok: true, message: `${ch.title} 등록 완료 (영상 ${count}개 가져옴)` };
+  return { ok: true, message: `${ch.title} 연결 완료 (영상 ${count}개 가져옴)` };
+});
+route("POST", "/api/admin/channels/:id/delete", (req, p) => {
+  requireAdmin(req);
+  db.prepare("DELETE FROM channels WHERE id = ?").run(p.id);
+  return { ok: true };
 });
 
-route("POST", "/api/admin/channels/:id", async (req, p) => {
+// SOOP 방송국 연결
+route("POST", "/api/admin/members/:id/soop", async (req, p) => {
   requireAdmin(req);
+  const m = memberRow(p.id);
   const b = await readJson(req);
-  if (b.action === "delete") db.prepare("DELETE FROM channels WHERE id = ?").run(p.id);
-  else db.prepare("UPDATE channels SET name = ?, crew_id = ? WHERE id = ?").run(str(b.name, 30), str(b.crew, 30) || null, p.id);
+  const st = await soop.resolve(b.soop).catch((e) => fail(400, e.message));
+  const owner = db.prepare("SELECT m.name FROM soop_channels s LEFT JOIN members m ON m.id = s.member_id WHERE s.id = ?").get(st.id);
+  if (owner) fail(409, `이미 등록된 방송국입니다: ${st.nick || st.id}${owner.name ? ` (${owner.name})` : ""}`);
+  db.prepare("INSERT INTO soop_channels (id, nick, thumb, member_id, created_at) VALUES (?, ?, ?, ?, ?)").run(st.id, st.nick, st.thumb, m.id, Date.now());
+  await soop.check(st.id).catch(() => {});
+  return { ok: true, message: `${st.nick || st.id} 연결 완료${st.live ? " (지금 방송 중)" : ""}` };
+});
+route("POST", "/api/admin/soop/:id/delete", (req, p) => {
+  requireAdmin(req);
+  db.prepare("DELETE FROM soop_channels WHERE id = ?").run(p.id);
   return { ok: true };
 });
 
 route("POST", "/api/admin/sync", async (req) => {
   requireAdmin(req);
   await Promise.all([process.env.YOUTUBE_API_KEY ? youtube.quickPoll() : null, soop.poll()]);
-  return { ok: true };
-});
-
-/* 관리자: SOOP 방송국 */
-route("GET", "/api/admin/soop", (req) => {
-  requireAdmin(req);
-  return db.prepare("SELECT * FROM soop_channels ORDER BY created_at DESC").all();
-});
-// 같은 유튜브 채널에 SOOP 방송국은 하나만 연결
-function checkYoutubeLink(youtubeId, soopId) {
-  if (!youtubeId) return null;
-  if (!db.prepare("SELECT 1 FROM channels WHERE id = ?").get(youtubeId)) fail(400, "연결할 유튜브 채널을 찾을 수 없습니다.");
-  const other = db.prepare("SELECT id FROM soop_channels WHERE youtube_id = ? AND id != ?").get(youtubeId, soopId);
-  if (other) fail(409, `그 유튜브 채널에는 이미 SOOP 방송국(${other.id})이 연결되어 있습니다.`);
-  return youtubeId;
-}
-route("POST", "/api/admin/soop", async (req) => {
-  requireAdmin(req);
-  const b = await readJson(req);
-  const st = await soop.resolve(b.soop).catch((e) => fail(400, e.message));
-  if (db.prepare("SELECT 1 FROM soop_channels WHERE id = ?").get(st.id)) fail(409, `이미 등록된 방송국입니다: ${st.nick || st.id}`);
-  const youtubeId = checkYoutubeLink(str(b.youtube, 40) || null, st.id);
-  db.prepare("INSERT INTO soop_channels (id, nick, thumb, name, crew_id, youtube_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)")
-    .run(st.id, st.nick, st.thumb, str(b.name, 30), str(b.crew, 30) || null, youtubeId, Date.now());
-  await soop.check(st.id).catch(() => {});
-  return { ok: true, message: `${st.nick || st.id} 등록 완료${st.live ? " (지금 방송 중)" : ""}` };
-});
-route("POST", "/api/admin/soop/:id", async (req, p) => {
-  requireAdmin(req);
-  const b = await readJson(req);
-  if (b.action === "delete") {
-    db.prepare("DELETE FROM soop_channels WHERE id = ?").run(p.id);
-    return { ok: true };
-  }
-  const youtubeId = checkYoutubeLink(str(b.youtube, 40) || null, p.id);
-  db.prepare("UPDATE soop_channels SET name = ?, crew_id = ?, youtube_id = ? WHERE id = ?").run(str(b.name, 30), str(b.crew, 30) || null, youtubeId, p.id);
   return { ok: true };
 });
 
@@ -629,7 +733,7 @@ route("POST", "/api/admin/files/:id/delete", (req, p) => {
 
 /* ---------- 백업 · 복원 (다른 서버로 옮길 때, 정기 백업) ---------- */
 // 올린 영상·파일은 백업에 들어가지 않음 (데이터베이스만)
-const BACKUP_TABLES = ["users", "codes", "crews", "channels", "videos", "soop_channels", "broadcasts", "sigs", "lessons", "files", "requests"];
+const BACKUP_TABLES = ["users", "codes", "crews", "members", "channels", "videos", "soop_channels", "broadcasts", "sigs", "lessons", "files", "requests"];
 
 route("GET", "/api/admin/backup", (req, _p, _u, res) => {
   requireAdmin(req);
@@ -673,6 +777,7 @@ route("POST", "/api/admin/restore", async (req) => {
         }
         db.exec("DELETE FROM main.sessions");
       });
+      linkMembers(); // 예전 백업이면 채널마다 멤버를 만들어 줌
     } finally {
       db.exec("DETACH DATABASE src");
       db.exec("PRAGMA foreign_keys = ON");
@@ -739,6 +844,10 @@ http.createServer(async (req, res) => {
     if (u?.role !== "admin" || !/^[a-f0-9]+\.\w+$/.test(name)) { res.writeHead(404); return res.end("Not found"); }
     return serveFile(res, path.join(DATA_DIR, "uploads", name));
   }
+
+  // 멤버 프로필 사진 · 공약 이미지 (공개)
+  const memberImg = pathname.match(/^\/media\/members\/([a-f0-9]{24}\.(?:png|jpe?g|gif|webp))$/i);
+  if (memberImg) return serveFile(res, path.join(DATA_DIR, "uploads", "members", memberImg[1]), { req });
 
   // 레슨 영상 · 다운로드 파일 (승인된 회원만)
   const media = pathname.match(/^\/media\/(lessons|files)\/([a-f0-9]{24}(?:\.[a-z0-9]{1,8})?)$/);

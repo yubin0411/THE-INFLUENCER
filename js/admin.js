@@ -532,139 +532,225 @@
     }
   });
 
-  /* ---------- 유튜브 채널 ---------- */
-  let ytChannels = [];
-  const ytOptions = (selected) => `<option value="">(연결 안 함)</option>` +
-    ytChannels.map((c) => `<option value="${esc(c.id)}" ${c.id === selected ? "selected" : ""}>${esc(c.name || c.title)}</option>`).join("");
+  /* ---------- 멤버 · 방송 채널 ---------- */
+  let members = [];
+  let memberCrew = "";
+  const ytUrl = (c) => `https://www.youtube.com/${c.handle || `channel/${c.id}`}`;
+  const soopUrl = (id) => `https://www.sooplive.co.kr/station/${encodeURIComponent(id)}`;
+  const crewLabelOf = (id) => crews.find((c) => c.id === id)?.name || "";
 
   async function loadChannels() {
-    const channels = await api("api/admin/channels");
-    ytChannels = channels;
-    $$(".yt-select").forEach((s) => (s.innerHTML = ytOptions(s.value)));
-    loadSoop();
+    members = await api("api/admin/members");
+    const f = $("#member-crew-filter");
+    f.innerHTML = `<option value="">전체</option><option value="-">(크루 없음)</option>` + crews.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join("");
+    f.value = memberCrew;
+    renderMembers();
     loadBroadcasts();
-    $("#channel-list").innerHTML = channels.length
-      ? channels.map((c) => `
-        <article class="channel-card" data-channel="${esc(c.id)}">
-          ${c.thumb ? `<img class="channel-thumb" src="${esc(c.thumb)}" alt="">` : '<div class="channel-thumb"></div>'}
-          <div class="channel-info">
-            <a href="https://www.youtube.com/channel/${esc(c.id)}" target="_blank" rel="noopener"><strong>${esc(c.title)}</strong></a>
-            <span>${esc(c.handle || c.id)}</span>
-            <span class="channel-stats">
-              ${c.is_live ? '<span class="badge-live">LIVE</span>' : ""}
-              게시글 ${c.posts} · Shorts ${c.shorts} · 확인 ${c.synced_at ? fmtAgo(c.synced_at) : "-"}
-            </span>
-          </div>
-          <label class="field">멤버 이름<input class="cell-input" name="name" value="${esc(c.name)}" maxlength="30" placeholder="${esc(c.title)}"></label>
-          <label class="field">크루<select class="cell-input" name="crew">${crewOptions(c.crew_id)}</select></label>
-          <div class="actions">
-            <button type="button" class="mini-action ok" data-save>저장</button>
-            <button type="button" class="mini-action danger" data-delete>삭제</button>
-          </div>
-        </article>`).join("")
-      : '<div class="empty">등록된 채널이 없습니다. 위에서 채널을 추가하세요.</div>';
+    if ($("#modal-member").open && editing?.id) fillEditor(members.find((m) => m.id === editing.id));
   }
 
-  $("#channel-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = $('[type="submit"]', e.target);
-    const note = $("#channel-note");
-    btn.disabled = true;
-    note.textContent = "채널 확인하고 영상 가져오는 중… (최대 1분 정도 걸릴 수 있어요)";
-    try {
-      const r = await api("api/admin/channels", Object.fromEntries(new FormData(e.target)));
-      e.target.reset();
-      note.textContent = r.message;
-      await loadChannels();
-    } catch (err) {
-      note.textContent = err.message;
-    } finally {
-      btn.disabled = false;
-    }
-  });
+  function renderMembers() {
+    const list = members.filter((m) => !memberCrew || (memberCrew === "-" ? !m.crew_id : m.crew_id === memberCrew));
+    $("#member-list").innerHTML = list.length
+      ? list.map((m, i) => {
+          const links = [
+            ...m.youtubes.map((c) => `<a class="pill-link yt" href="${esc(ytUrl(c))}" target="_blank" rel="noopener">${c.is_live ? "● " : ""}YouTube · ${esc(c.handle || c.title)}</a>`),
+            ...m.soops.map((c) => `<a class="pill-link soop" href="${esc(soopUrl(c.id))}" target="_blank" rel="noopener">${c.live ? "● " : ""}SOOP · ${esc(c.nick || c.id)}</a>`),
+            m.instagram ? `<a class="pill-link ig" href="${esc(m.instagram)}" target="_blank" rel="noopener">Instagram</a>` : "",
+          ].join("");
+          const filled = [m.profile_text && "프로필", (m.promise_text || m.promise_image) && "공약", m.sig_ids.length && `시그 ${m.sig_ids.length}`].filter(Boolean);
+          return `
+          <article class="member-admin" data-member="${m.id}">
+            <div class="order-cell">
+              <button type="button" class="mini-action" data-move="-1" aria-label="위로" ${i === 0 || memberCrew ? "disabled" : ""}>▲</button>
+              <button type="button" class="mini-action" data-move="1" aria-label="아래로" ${i === list.length - 1 || memberCrew ? "disabled" : ""}>▼</button>
+            </div>
+            ${m.thumb ? `<img class="channel-thumb" src="${esc(m.thumb)}" alt="">` : '<div class="channel-thumb"></div>'}
+            <div class="channel-info">
+              <strong>${esc(m.name)} ${m.role_title ? `<span class="tag">${esc(m.role_title)}</span>` : ""} ${m.is_live ? '<span class="badge-live" style="position:static">LIVE</span>' : ""}</strong>
+              <span>${esc(crewLabelOf(m.crew_id) || "크루 없음")}${m.quote ? ` · ${esc(m.quote)}` : ""}</span>
+              <span class="pill-links">${links || '<span class="muted">연결된 채널 없음</span>'}</span>
+              <span class="muted">${filled.length ? `입력됨: ${filled.join(" · ")}` : "프로필 · 공약 · 시그 미입력"}</span>
+            </div>
+            <div class="actions">
+              <button type="button" class="mini-action ok" data-edit>편집</button>
+              <button type="button" class="mini-action danger" data-delete>삭제</button>
+            </div>
+          </article>`;
+        }).join("")
+      : '<div class="empty">등록된 멤버가 없습니다. [+ 멤버 추가]를 눌러 시작하세요.</div>';
+  }
 
-  $("#channel-list").addEventListener("click", (e) => {
+  $("#member-crew-filter").addEventListener("change", (e) => { memberCrew = e.target.value; renderMembers(); });
+  $("#member-add").addEventListener("click", () => openEditor(null));
+
+  $("#member-list").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
     if (!btn) return;
-    const card = btn.closest("[data-channel]");
-    const id = card.dataset.channel;
+    const id = Number(btn.closest("[data-member]").dataset.member);
+    if (btn.hasAttribute("data-edit")) return openEditor(members.find((m) => m.id === id));
     if (btn.hasAttribute("data-delete")) {
       if (!confirmClick(btn)) return;
-      return act(btn, async () => { await api(`api/admin/channels/${id}`, { action: "delete" }); await loadChannels(); });
+      return act(btn, async () => { await api(`api/admin/members/${id}/delete`, {}); await loadChannels(); });
     }
-    act(btn, async () => {
-      await api(`api/admin/channels/${id}`, { name: $('[name="name"]', card).value, crew: $('[name="crew"]', card).value });
-      $("#channel-note").textContent = "저장했습니다.";
-      await loadChannels();
-    });
+    if (btn.dataset.move) return act(btn, async () => { await api(`api/admin/members/${id}/move`, { dir: Number(btn.dataset.move) }); await loadChannels(); });
   });
 
   $("#sync-btn").addEventListener("click", (e) => act(e.currentTarget, async () => {
     $("#channel-note").textContent = "새로고침 중…";
     await api("api/admin/sync", {});
     $("#channel-note").textContent = "새로고침 완료";
-    await Promise.all([loadChannels(), loadBroadcasts()]);
+    await loadChannels();
   }));
 
-  /* ---------- SOOP 방송국 ---------- */
-  async function loadSoop() {
-    const list = await api("api/admin/soop");
-    $("#soop-list").innerHTML = list.length
-      ? list.map((c) => `
-        <article class="channel-card soop-card" data-soop="${esc(c.id)}">
-          ${c.thumb ? `<img class="channel-thumb" src="${esc(c.thumb)}" alt="">` : '<div class="channel-thumb"></div>'}
-          <div class="channel-info">
-            <a href="https://www.sooplive.co.kr/station/${esc(c.id)}" target="_blank" rel="noopener"><strong>${esc(c.nick || c.id)}</strong></a>
-            <span>${esc(c.id)}</span>
-            <span class="channel-stats">
-              ${c.live ? `<span class="badge-live soop">LIVE</span> ${esc(c.title)}` : `확인 ${c.checked_at ? fmtAgo(c.checked_at) : "-"}`}
-            </span>
-          </div>
-          <label class="field">같은 사람 유튜브<select class="cell-input" name="youtube">${ytOptions(c.youtube_id)}</select></label>
-          <label class="field">멤버 이름<input class="cell-input" name="name" value="${esc(c.name)}" maxlength="30" placeholder="${esc(c.youtube_id ? "유튜브 멤버 이름 사용" : c.nick)}"></label>
-          <label class="field">크루<select class="cell-input" name="crew">${crewOptions(c.crew_id)}</select></label>
-          <div class="actions">
-            <button type="button" class="mini-action ok" data-save>저장</button>
-            <button type="button" class="mini-action danger" data-delete>삭제</button>
-          </div>
-        </article>`).join("")
-      : '<div class="empty">등록된 SOOP 방송국이 없습니다.</div>';
+  /* 멤버 편집 창 */
+  const form = $("#member-form");
+  const note = $("#member-note");
+  let editing = null;        // 편집 중인 멤버 (새 멤버면 { id: null })
+  let picked = [];           // 고른 대표 시그 id
+  let crewSigs = [];         // 멤버 크루의 시그 목록
+  const pending = { photo: null, promise: null }; // 저장할 때 올릴 이미지
+
+  const imgPreview = (url, cls) => (url ? `<img src="${esc(url)}" alt="" class="${cls}">` : `<span class="${cls} empty-img">없음</span>`);
+
+  async function loadCrewSigs() {
+    const crew = form.elements.crew.value;
+    try { crewSigs = await api(`api/sigs${crew ? `?crew=${encodeURIComponent(crew)}` : ""}`); } catch { crewSigs = []; }
+    renderSigPicker();
   }
 
-  $("#soop-form").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const btn = $('[type="submit"]', e.target);
-    const note = $("#soop-note");
-    btn.disabled = true;
-    note.textContent = "방송국 확인 중…";
-    try {
-      const r = await api("api/admin/soop", Object.fromEntries(new FormData(e.target)));
-      e.target.reset();
-      note.textContent = r.message;
-      await Promise.all([loadSoop(), loadBroadcasts()]);
-    } catch (err) {
-      note.textContent = err.message;
-    } finally {
-      btn.disabled = false;
-    }
+  function renderSigPicker() {
+    const byId = new Map(crewSigs.map((sg) => [sg.id, sg]));
+    $("#ed-sig-count").textContent = picked.length ? `${picked.length}개` : "";
+    $("#ed-sig-picked").innerHTML = picked.length
+      ? picked.map((id, i) => {
+          const sg = byId.get(id);
+          return `<span class="sig-chip" data-pick="${id}">${i + 1}. ${esc(sg ? sg.name : `(다른 크루/삭제된 시그 #${id})`)}${sg ? ` <small>${sg.price.toLocaleString()}</small>` : ""}
+            <button type="button" data-unpick="${id}" aria-label="빼기">×</button></span>`;
+        }).join("")
+      : '<span class="muted">아직 고른 시그가 없습니다.</span>';
+    const q = $("#ed-sig-search").value.trim().toLowerCase().replace(/,/g, "");
+    const opts = crewSigs.filter((sg) => !picked.includes(sg.id) && (!q || sg.name.toLowerCase().includes(q) || String(sg.price).includes(q))).slice(0, 60);
+    $("#ed-sig-options").innerHTML = opts.length
+      ? opts.map((sg) => `<button type="button" class="sig-opt" data-pick-add="${sg.id}">+ ${esc(sg.name)} <small>${sg.price.toLocaleString()}</small></button>`).join("")
+      : `<span class="muted">${!crewSigs.length ? "이 크루에 등록된 시그가 없습니다." : q ? "검색 결과가 없습니다." : "모든 시그를 골랐습니다."}</span>`;
+  }
+
+  $("#ed-sig-search").addEventListener("input", renderSigPicker);
+  form.elements.crew.addEventListener("change", loadCrewSigs);
+  form.addEventListener("click", (e) => {
+    const add = e.target.closest("[data-pick-add]");
+    if (add) { picked.push(Number(add.dataset.pickAdd)); return renderSigPicker(); }
+    const rm = e.target.closest("[data-unpick]");
+    if (rm) { picked = picked.filter((id) => id !== Number(rm.dataset.unpick)); return renderSigPicker(); }
   });
 
-  $("#soop-list").addEventListener("click", (e) => {
-    const btn = e.target.closest("button");
-    if (!btn) return;
-    const card = btn.closest("[data-soop]");
-    const id = encodeURIComponent(card.dataset.soop);
-    if (btn.hasAttribute("data-delete")) {
-      if (!confirmClick(btn)) return;
-      return act(btn, async () => { await api(`api/admin/soop/${id}`, { action: "delete" }); await Promise.all([loadSoop(), loadBroadcasts()]); });
-    }
+  function renderChannels(m) {
+    const ready = !!m?.id;
+    $("#ed-youtube-list").innerHTML = (m?.youtubes || []).map((c) => `
+      <li><a href="${esc(ytUrl(c))}" target="_blank" rel="noopener">${c.is_live ? '<span class="badge-live" style="position:static">LIVE</span> ' : ""}${esc(c.title)}</a>
+        <span class="muted">${esc(c.handle || c.id)} · 게시글 ${c.posts} · Shorts ${c.shorts}</span>
+        <button type="button" class="mini-action danger" data-unlink-yt="${esc(c.id)}">연결 해제</button></li>`).join("");
+    $("#ed-soop-list").innerHTML = (m?.soops || []).map((c) => `
+      <li><a href="${esc(soopUrl(c.id))}" target="_blank" rel="noopener">${c.live ? '<span class="badge-live soop" style="position:static">LIVE</span> ' : ""}${esc(c.nick || c.id)}</a>
+        <span class="muted">${esc(c.id)}</span>
+        <button type="button" class="mini-action danger" data-unlink-soop="${esc(c.id)}">연결 해제</button></li>`).join("");
+    if (!ready) $("#ed-youtube-list").innerHTML = $("#ed-soop-list").innerHTML = "";
+  }
+
+  function fillEditor(m) {
+    if (!m) return;
+    editing = m;
+    renderChannels(m);
+    $("#ed-photo").innerHTML = imgPreview(pending.photo ? URL.createObjectURL(pending.photo) : m.photo_url || m.thumb, "ed-photo-img");
+    $("#ed-promise").innerHTML = imgPreview(pending.promise ? URL.createObjectURL(pending.promise) : m.promise_url, "ed-promise-img");
+    $("#ed-photo-del").hidden = !m.photo_url;
+    $("#ed-promise-del").hidden = !m.promise_url;
+  }
+
+  function openEditor(m) {
+    form.reset();
+    note.textContent = "";
+    pending.photo = pending.promise = null;
+    editing = m || { id: null, youtubes: [], soops: [] };
+    $("#member-editor-title").textContent = m ? `멤버 편집 · ${m.name}` : "멤버 추가";
+    form.elements.crew.innerHTML = crewOptions(m ? m.crew_id : memberCrew && memberCrew !== "-" ? memberCrew : "");
+    const f = form.elements;
+    f.id.value = m?.id || "";
+    for (const k of ["name", "role_title", "quote", "instagram", "kakao", "profile_text", "promise_text"]) f[k].value = m?.[k] || "";
+    picked = [...(m?.sig_ids || [])];
+    $("#ed-sig-search").value = "";
+    fillEditor(editing);
+    if (!m) { $("#ed-photo").innerHTML = imgPreview(null, "ed-photo-img"); $("#ed-promise").innerHTML = imgPreview(null, "ed-promise-img"); }
+    loadCrewSigs();
+    $("#modal-member").showModal();
+  }
+
+  form.elements.photo.addEventListener("change", (e) => {
+    pending.photo = e.target.files[0] || null;
+    if (pending.photo) $("#ed-photo").innerHTML = imgPreview(URL.createObjectURL(pending.photo), "ed-photo-img");
+  });
+  form.elements.promise.addEventListener("change", (e) => {
+    pending.promise = e.target.files[0] || null;
+    if (pending.promise) $("#ed-promise").innerHTML = imgPreview(URL.createObjectURL(pending.promise), "ed-promise-img");
+  });
+
+  // 이미지 삭제 · 채널 연결 해제 (바로 반영)
+  form.addEventListener("click", (e) => {
+    const btn = e.target.closest("#ed-photo-del, #ed-promise-del, [data-unlink-yt], [data-unlink-soop]");
+    if (!btn || !editing?.id) return;
+    if (!confirmClick(btn)) return;
     act(btn, async () => {
-      await api(`api/admin/soop/${id}`, {
-        youtube: $('[name="youtube"]', card).value, name: $('[name="name"]', card).value, crew: $('[name="crew"]', card).value,
-      });
-      $("#soop-note").textContent = "저장했습니다.";
-      await Promise.all([loadSoop(), loadBroadcasts()]);
+      if (btn.id) await api(`api/admin/members/${editing.id}/image/delete`, { kind: btn.id === "ed-promise-del" ? "promise" : "photo" });
+      else if (btn.dataset.unlinkYt) await api(`api/admin/channels/${encodeURIComponent(btn.dataset.unlinkYt)}/delete`, {});
+      else await api(`api/admin/soop/${encodeURIComponent(btn.dataset.unlinkSoop)}/delete`, {});
+      note.textContent = "반영했습니다.";
+      await loadChannels();
     });
+  });
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $('[type="submit"]', form);
+    const f = form.elements;
+    btn.disabled = true;
+    const done = [];
+    try {
+      note.textContent = "저장 중…";
+      const body = { id: f.id.value || undefined, sig_ids: picked };
+      for (const k of ["name", "crew", "role_title", "quote", "instagram", "kakao", "profile_text", "promise_text"]) body[k] = f[k].value;
+      const { id } = await api("api/admin/members", body);
+      f.id.value = id;
+      editing = { ...editing, id };
+      done.push("기본 정보");
+      for (const kind of ["photo", "promise"]) {
+        if (!pending[kind]) continue;
+        note.textContent = `${kind === "photo" ? "프로필 사진" : "공약 이미지"} 올리는 중…`;
+        await upload(`api/admin/members/${id}/image?kind=${kind}`, pending[kind]);
+        pending[kind] = null;
+        f[kind].value = "";
+        done.push(kind === "photo" ? "프로필 사진" : "공약 이미지");
+      }
+      if (f.youtube_new.value.trim()) {
+        note.textContent = "유튜브 채널 확인하고 영상 가져오는 중… (최대 1분)";
+        const r = await api(`api/admin/members/${id}/youtube`, { channel: f.youtube_new.value });
+        f.youtube_new.value = "";
+        done.push(r.message);
+      }
+      if (f.soop_new.value.trim()) {
+        note.textContent = "SOOP 방송국 확인 중…";
+        const r = await api(`api/admin/members/${id}/soop`, { soop: f.soop_new.value });
+        f.soop_new.value = "";
+        done.push(r.message);
+      }
+      note.textContent = `저장했습니다: ${done.join(" · ")}`;
+      $("#member-editor-title").textContent = `멤버 편집 · ${f.name.value}`;
+    } catch (err) {
+      note.textContent = `${done.length ? `${done.join(" · ")} 저장됨. ` : ""}${err.message}`;
+    } finally {
+      btn.disabled = false;
+      await loadChannels().catch(() => {});
+    }
   });
 
   /* ---------- 방송 기록 (월별 방송 시간) ---------- */
@@ -678,7 +764,7 @@
     const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
     return `${d.getMonth() + 1}.${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
   };
-  const crewLabel = (id) => crews.find((c) => c.id === id)?.name || "";
+  const crewLabel = crewLabelOf;
 
   async function loadBroadcasts(month) {
     const sel = $("#bc-month");

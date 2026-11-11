@@ -542,21 +542,8 @@
     } else if (page === "members") {
       const members = site.members.filter((m) => m.crew === crew);
       body.innerHTML = members.length
-        ? `<div class="member-grid">${members.map((m) => `
-            <div class="member-card">
-              <a class="member-main" href="${m.youtube ? pageHref(crew, "posts", m.id) : esc(soopUrl(m))}" ${m.youtube ? "" : 'target="_blank" rel="noopener"'}>
-                ${avatar(m)}
-                ${m.is_live ? '<span class="badge-live">LIVE</span>' : ""}
-                <strong>${esc(m.name)}</strong>
-              </a>
-              <span class="member-links">
-                ${m.youtube ? `<a href="${pageHref(crew, "posts", m.id)}">게시글</a>
-                <a href="${pageHref(crew, "shorts", m.id)}">쇼츠</a>
-                <a href="${esc(channelUrl(m))}" target="_blank" rel="noopener">유튜브 ↗</a>` : ""}
-                ${m.soop ? `<a href="${esc(soopUrl(m))}" target="_blank" rel="noopener">SOOP ↗</a>` : ""}
-              </span>
-            </div>`).join("")}</div>`
-        : empty("등록된 멤버가 없습니다. 관리자 페이지의 방송 채널에서 이 크루로 채널을 추가하세요.");
+        ? `<div class="member-grid">${members.map(memberCard).join("")}</div>`
+        : empty("등록된 멤버가 없습니다. 관리자 페이지의 멤버 · 채널에서 이 크루로 멤버를 추가하세요.");
     } else if (page === "live") {
       const lives = liveNow.filter((l) => l.crew === crew);
       body.innerHTML = lives.length ? `<div class="live-grid">${lives.map(liveCard).join("")}</div>` : empty("지금 방송 중인 멤버가 없습니다.");
@@ -574,13 +561,87 @@
     }
   }
 
+  /* ---------- 멤버 카드 · 자세히 (프로필 · 공약 · 시그) ---------- */
+  function socialLinks(m) {
+    return [
+      ...m.youtubes.map((c) => `<a class="social yt" href="${esc(`https://www.youtube.com/${c.handle || `channel/${c.id}`}`)}" target="_blank" rel="noopener" title="유튜브">YouTube</a>`),
+      ...m.soops.map((id) => `<a class="social soop" href="${esc(`https://www.sooplive.co.kr/station/${encodeURIComponent(id)}`)}" target="_blank" rel="noopener" title="SOOP 방송국">SOOP</a>`),
+      m.instagram ? `<a class="social ig" href="${esc(m.instagram)}" target="_blank" rel="noopener" title="인스타그램">Instagram</a>` : "",
+      m.kakao ? `<a class="social kakao" href="${esc(m.kakao)}" target="_blank" rel="noopener" title="카카오톡 오픈채팅">Kakao</a>` : "",
+    ].join("");
+  }
+  const hasPromise = (m) => !!(m.promise_text || m.promise_image);
+
+  const memberCard = (m) => `
+    <article class="member-card">
+      <button type="button" class="member-main" data-member-open="${esc(m.id)}">
+        <span class="member-photo">${avatar(m)}${m.is_live ? '<span class="badge-live">LIVE</span>' : ""}</span>
+        ${m.role_title ? `<span class="member-role">${esc(m.role_title)}</span>` : ""}
+        <strong>${esc(m.name)}</strong>
+        ${m.quote ? `<span class="member-quote">${esc(m.quote)}</span>` : ""}
+      </button>
+      <span class="member-socials">${socialLinks(m)}</span>
+      <span class="member-btns">
+        <button type="button" data-member-open="${esc(m.id)}" data-tab="profile" ${m.profile_text ? "" : "disabled"}>프로필</button>
+        <button type="button" data-member-open="${esc(m.id)}" data-tab="promise" ${hasPromise(m) ? "" : "disabled"}>공약</button>
+        <button type="button" data-member-open="${esc(m.id)}" data-tab="sigs" ${m.sig_ids.length ? "" : "disabled"}>시그</button>
+      </span>
+      ${m.youtube ? `<span class="member-links"><a href="${pageHref(m.crew, "posts", m.id)}">게시글</a><a href="${pageHref(m.crew, "shorts", m.id)}">쇼츠</a></span>` : ""}
+    </article>`;
+
+  const MP_TABS = [{ id: "profile", name: "프로필" }, { id: "promise", name: "공약" }, { id: "sigs", name: "시그" }];
+  let mpMember = null;
+
+  function openMember(id, tab) {
+    const m = site.members.find((x) => x.id === id);
+    if (!m) return;
+    mpMember = m;
+    $("#mp-head").innerHTML = `
+      <span class="mp-photo">${avatar(m)}${m.is_live ? '<span class="badge-live">LIVE</span>' : ""}</span>
+      <div class="mp-info">
+        <p class="crumb">${esc([crewName(m.crew), m.role_title].filter(Boolean).join(" · "))}</p>
+        <h2 id="mp-name">${esc(m.name)}</h2>
+        ${m.quote ? `<p class="mp-quote">${esc(m.quote)}</p>` : ""}
+        <span class="member-socials left">${socialLinks(m)}</span>
+      </div>`;
+    const first = tab || (m.profile_text ? "profile" : hasPromise(m) ? "promise" : m.sig_ids.length ? "sigs" : "profile");
+    renderMemberTab(first);
+    if (!$("#modal-member").open) $("#modal-member").showModal();
+  }
+
+  function renderMemberTab(tab) {
+    const m = mpMember;
+    $("#mp-tabs").innerHTML = MP_TABS.map((t) => `<button type="button" class="tab ${t.id === tab ? "is-active" : ""}" data-mp-tab="${t.id}" role="tab" aria-selected="${t.id === tab}">${t.name}</button>`).join("");
+    const body = $("#mp-body");
+    if (tab === "profile") {
+      body.innerHTML = m.profile_text ? `<div class="mp-text">${esc(m.profile_text)}</div>` : empty("등록된 프로필이 없습니다.");
+    } else if (tab === "promise") {
+      body.innerHTML = hasPromise(m)
+        ? `${m.promise_image ? `<a class="mp-promise-img" href="${esc(m.promise_image)}" target="_blank" rel="noopener"><img src="${esc(m.promise_image)}" alt="${esc(m.name)} 공약 이미지"></a>` : ""}
+           ${m.promise_text ? `<div class="mp-text">${esc(m.promise_text)}</div>` : ""}`
+        : empty("등록된 공약이 없습니다.");
+    } else {
+      const list = m.sig_ids.map((id) => sigs.find((sg) => sg.id === id)).filter(Boolean);
+      body.innerHTML = list.length
+        ? `<div class="sig-cards">${list.map((sg) => sigCard(sg)).join("")}</div>`
+        : empty("등록된 시그가 없습니다.");
+    }
+  }
+
+  document.addEventListener("click", (e) => {
+    const open = e.target.closest("[data-member-open]");
+    if (open) return openMember(open.dataset.memberOpen, open.dataset.tab);
+    const tab = e.target.closest("[data-mp-tab]");
+    if (tab) renderMemberTab(tab.dataset.mpTab);
+  });
+
   async function loadMore() {
     const btn = $("#list-more");
     const grid = $("#list-grid");
     const req = { ...list };
     btn.disabled = true;
     try {
-      const q = new URLSearchParams({ type: req.type, crew: req.crew, limit: LIST_COUNT, ...(req.channel ? { channel: req.channel } : {}), ...(req.before ? { before: req.before } : {}) });
+      const q = new URLSearchParams({ type: req.type, crew: req.crew, limit: LIST_COUNT, ...(req.channel ? { member: req.channel } : {}), ...(req.before ? { before: req.before } : {}) });
       const { items, more } = await api(`api/videos?${q}`);
       if (grid !== $("#list-grid")) return; // 그새 다른 페이지로 이동함
       grid.insertAdjacentHTML("beforeend", items.map(videoCard).join(""));
