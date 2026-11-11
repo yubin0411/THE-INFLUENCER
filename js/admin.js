@@ -16,7 +16,7 @@
     if (user && !isAdmin) $(".form-note", $("#admin-login")).textContent = "관리자 계정이 아닙니다.";
     if (!isAdmin) return;
     await loadCrews(); // 채널 · 방송 기록의 크루 표시에 필요
-    await Promise.all([loadUsers(), loadCodes(), loadChannels(), loadRequests()]);
+    await Promise.all([loadUsers(), loadCodes(), loadChannels(), loadRequests(), loadBrand()]);
   }
 
   $("#admin-login").addEventListener("submit", async (e) => {
@@ -236,6 +236,35 @@
       xhr.send(file);
     });
   }
+
+  /* ---------- 사이트 꾸미기 (로고 · 배너 · 링크) ---------- */
+  function drawBrand(b) {
+    $("#brand-logo").innerHTML = b.logo ? `<img src="${esc(b.logo)}" alt="로고">` : '<span class="hint">아직 없음</span>';
+    $("#brand-banner").innerHTML = b.banner ? `<img src="${esc(b.banner)}" alt="배너">` : '<span class="hint">아직 없음 (홈에 배너 칸이 안 보임)</span>';
+    $$("[data-brand-del]").forEach((x) => (x.hidden = !b[x.dataset.brandDel]));
+    for (const k of ["banner_link", "youtube_url", "soop_url"]) $(`#brand-form [name="${k}"]`).value = b[k] || "";
+  }
+  async function loadBrand() { drawBrand((await api("api/site")).brand || {}); }
+
+  $$("[data-brand-file]").forEach((input) => input.addEventListener("change", async () => {
+    const file = input.files[0];
+    if (!file) return;
+    $("#brand-note").textContent = "올리는 중…";
+    try {
+      drawBrand(await upload(`api/admin/brand/image?kind=${input.dataset.brandFile}`, file));
+      $("#brand-note").textContent = "올렸습니다. 사이트를 새로고침하면 보입니다.";
+    } catch (err) { $("#brand-note").textContent = err.message; }
+    input.value = "";
+  }));
+  $$("[data-brand-del]").forEach((btn) => btn.addEventListener("click", () => {
+    if (!confirmClick(btn)) return;
+    act(btn, async () => { drawBrand(await api("api/admin/brand/image/delete", { kind: btn.dataset.brandDel })); $("#brand-note").textContent = "지웠습니다."; });
+  }));
+  $("#brand-form").addEventListener("submit", (e) => {
+    e.preventDefault();
+    const btn = $('button[type="submit"]', e.target);
+    act(btn, async () => { drawBrand(await api("api/admin/brand", Object.fromEntries(new FormData(e.target)))); $("#brand-note").textContent = "저장했습니다."; });
+  });
 
   /* ---------- 시그 · 레슨 영상 ---------- */
   const KIND = { youtube: "유튜브", drive: "드라이브", link: "링크", file: "파일", pending: "파일 대기" };

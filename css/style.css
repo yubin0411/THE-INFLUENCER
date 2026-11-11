@@ -81,6 +81,15 @@ img { max-width: 100%; display: block; }
   display: grid; place-items: center; width: 32px; height: 32px; border-radius: 9px;
   background: var(--accent); color: var(--accent-ink); font-weight: 900;
 }
+/* 로고에 프사 이미지를 올리면 동그랗게 */
+.logo-mark.has-img { border-radius: 50%; overflow: hidden; background: var(--surface-2); }
+.logo-mark img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+/* 홈 맨 위 배너 (권장 1920×480, 4:1) */
+.home-banner { margin-bottom: 24px; border-radius: 16px; overflow: hidden; background: var(--surface-2); aspect-ratio: 4 / 1; }
+.home-banner a, .home-banner img { display: block; width: 100%; height: 100%; }
+.home-banner img { object-fit: cover; }
+@media (max-width: 640px) { .home-banner { border-radius: 12px; margin-bottom: 16px; } }
 
 .desktop-nav { display: flex; align-self: stretch; gap: 2px; flex: 1; min-width: 0; }
 .nav-item { position: relative; display: flex; }
@@ -415,9 +424,13 @@ a:hover .thumb img, button:hover .thumb img { transform: scale(1.04); }
   display: flex; justify-content: space-between; align-items: flex-end; gap: 16px; flex-wrap: wrap;
   color: var(--muted); font-size: 13px;
 }
-.footer-logo { color: var(--text); font-size: 16px; }
-.footer-meta { margin: 8px 0 0; }
 .copyright { margin: 0; }
+.footer-sns { display: flex; align-items: center; gap: 10px; }
+.sns-link {
+  display: inline-flex; align-items: center; gap: 8px; padding: 7px 12px;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--text); font-weight: 700; font-size: 13px;
+}
+a.sns-link:hover { border-color: var(--text); }
 
 /* ---------- Modal ---------- */
 .modal {
@@ -955,3 +968,15 @@ button.cal-cell:hover, .cal-cell.is-selected { outline: 2px solid var(--text); o
 .muted { color: var(--muted); }
 .more-rows summary { cursor: pointer; padding: 10px 2px; font-size: 13px; font-weight: 700; color: var(--muted); }
 .more-rows summary:hover { color: var(--text); }
+
+/* 관리자: 사이트 꾸미기 */
+.brand-grid { display: grid; grid-template-columns: 1fr 2fr; gap: 16px; margin-bottom: 16px; }
+.brand-grid .box h3, .brand-links h3 { margin: 0 0 6px; }
+.brand-preview { display: grid; place-items: center; margin: 12px 0; background: var(--surface-2); border: 1px dashed var(--line); overflow: hidden; }
+.brand-preview img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.brand-preview.is-logo { width: 120px; height: 120px; border-radius: 50%; }
+.brand-preview.is-banner { width: 100%; aspect-ratio: 4 / 1; border-radius: 12px; }
+.brand-links { display: grid; gap: 10px; max-width: 640px; }
+.brand-links .primary-btn { justify-self: start; }
+@media (max-width: 760px) { .brand-grid { grid-template-columns: 1fr; } }
+.brand-grid > .box, .brand-links { border: 1px solid var(--line); border-radius: 14px; padding: 16px; background: var(--surface); }

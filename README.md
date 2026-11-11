@@ -1,6 +1,6 @@
 # THE-INFLUENCER
 
-(주) 이터널 사이트와 관리자 페이지입니다. Node.js 24 이상에서 추가 설치 없이 실행됩니다.
+ONE PICK 사이트와 관리자 페이지입니다. Node.js 24 이상에서 추가 설치 없이 실행됩니다.
 
 ```bash
 node server.js        # http://localhost:8000

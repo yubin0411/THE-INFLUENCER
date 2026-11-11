@@ -1551,12 +1551,32 @@
     // 한 크루만 쓰는 사이트: 첫 번째 크루와 그 멤버만
     site.crews = site.crews.slice(0, 1);
     site.members = site.members.filter(inCrew);
-    if (site.crews[0]) document.title = site.crews[0].name;
+    renderBrand(site.brand || {});
     try { sigs = (await api("api/sigs")).filter(inCrew); } catch { sigs = []; }
     $("#backwall-member").innerHTML = site.members.length
       ? site.members.map((m) => `<option>${esc(m.name)}</option>`).join("")
       : "<option value=''>등록된 멤버가 없습니다</option>";
     renderUser();
+  }
+
+  // 로고(프사) · 배너 · 하단 유튜브/SOOP 링크 (관리자 › 사이트 꾸미기)
+  function renderBrand(b) {
+    const mark = $("#logo-mark");
+    mark.classList.toggle("has-img", !!b.logo);
+    mark.innerHTML = b.logo ? `<img src="${esc(b.logo)}" alt="">` : "1";
+    if (b.logo) $("#site-icon").href = b.logo;
+
+    const banner = $("#home-banner");
+    banner.hidden = !b.banner;
+    if (b.banner) {
+      const img = `<img src="${esc(b.banner)}" alt="ONE PICK 배너">`;
+      banner.innerHTML = b.banner_link ? `<a href="${esc(b.banner_link)}" target="_blank" rel="noopener">${img}</a>` : img;
+    }
+
+    const sns = [["youtube", "YouTube", b.youtube_url], ["soop", "SOOP", b.soop_url]];
+    $("#footer-sns").innerHTML = sns.map(([pf, name, url]) => url
+      ? `<a class="sns-link" href="${esc(url)}" target="_blank" rel="noopener" aria-label="ONE PICK ${name}">${logo(pf)}<span>${name}</span></a>`
+      : `<span class="sns-link">${logo(pf)}<span>${name}</span></span>`).join("");
   }
 
   // 멤버 방송 상태(LIVE 표시) 1분마다 갱신
@@ -1568,7 +1588,6 @@
     if (current.page === "members" && was !== fresh.map((m) => `${m.id}:${m.live_url}`).join()) renderPage();
   }
 
-  $("#year").textContent = new Date().getFullYear();
   loadSite().then(() => {
     fillLogos();
     renderHomeSigs = sigTable({ search: $("#sig-search"), body: $("#sig-list"), pager: $("#sig-pages"), rows: () => sigs, sort: () => "new" });

@@ -1,5 +1,5 @@
 /*
- * (주) 이터널 서버
+ * ONE PICK 서버
  *   실행: node server.js   (기본 http://localhost:8000)
  *   설정: .env  →  YOUTUBE_API_KEY, ADMIN_ID, ADMIN_PASSWORD, (선택) PORT
  */
@@ -87,8 +87,18 @@ const route = (method, pattern, handler) => {
   routes.push({ method, re, keys, handler });
 };
 
+// 사이트 꾸미기: 로고(프사) · 배너 · 하단 유튜브/SOOP 링크
+const BRAND_KEYS = ["logo", "banner", "banner_link", "youtube_url", "soop_url"];
+function brand() {
+  const b = Object.fromEntries(BRAND_KEYS.map((k) => [k, null]));
+  for (const r of db.prepare("SELECT key, value FROM settings").all()) if (r.key in b) b[r.key] = r.value || null;
+  return { ...b, logo: b.logo && `/media/site/${b.logo}`, banner: b.banner && `/media/site/${b.banner}` };
+}
+const setSetting = (key, value) => db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(key, value ?? null);
+
 // 사이트 기본 정보
 route("GET", "/api/site", (req) => ({
+  brand: brand(),
   crews: db.prepare("SELECT id, name FROM crews ORDER BY sort, name").all(),
   members: publicMembers(),
   user: auth.currentUser(req),
@@ -498,6 +508,36 @@ route("POST", "/api/admin/members/:id/image/delete", async (req, p) => {
   removeStored([m[col] && `members/${m[col]}`]);
   db.prepare(`UPDATE members SET ${col} = NULL, updated_at = ? WHERE id = ?`).run(Date.now(), m.id);
   return { ok: true };
+});
+
+// 로고 · 배너 이미지 올리기 (?kind=logo | banner), 지우기
+route("POST", "/api/admin/brand/image", async (req, _p, url) => {
+  requireAdmin(req);
+  const key = url.searchParams.get("kind") === "banner" ? "banner" : "logo";
+  const up = await saveUpload(req, "site");
+  if (!IMAGE_EXT.test(up.file) || up.size > 20 * 1024 * 1024) {
+    removeStored([`site/${up.file}`]);
+    fail(400, "이미지(jpg, png, gif, webp) 20MB 이하만 올릴 수 있습니다.");
+  }
+  const old = db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
+  removeStored([old && `site/${old}`]);
+  setSetting(key, up.file);
+  return brand();
+});
+route("POST", "/api/admin/brand/image/delete", async (req) => {
+  requireAdmin(req);
+  const key = (await readJson(req)).kind === "banner" ? "banner" : "logo";
+  const old = db.prepare("SELECT value FROM settings WHERE key = ?").get(key)?.value;
+  removeStored([old && `site/${old}`]);
+  setSetting(key, null);
+  return brand();
+});
+// 배너 클릭 링크 · 하단 유튜브/SOOP 링크
+route("POST", "/api/admin/brand", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  for (const k of ["banner_link", "youtube_url", "soop_url"]) setSetting(k, linkUrl(b[k]));
+  return brand();
 });
 
 // 유튜브 채널 연결 (등록하면서 과거 영상도 가져옴)
@@ -1097,6 +1137,10 @@ http.createServer(async (req, res) => {
   // 멤버 프로필 사진 · 공약 이미지 (공개)
   const memberImg = pathname.match(/^\/media\/members\/([a-f0-9]{24}\.(?:png|jpe?g|gif|webp))$/i);
   if (memberImg) return serveFile(res, path.join(DATA_DIR, "uploads", "members", memberImg[1]), { req });
+
+  // 로고 · 배너 (공개)
+  const siteImg = pathname.match(/^\/media\/site\/([a-f0-9]{24}\.(?:png|jpe?g|gif|webp))$/i);
+  if (siteImg) return serveFile(res, path.join(DATA_DIR, "uploads", "site", siteImg[1]), { req });
 
   // 레슨 영상 · 다운로드 파일 (승인된 회원만)
   const media = pathname.match(/^\/media\/(lessons|files)\/([a-f0-9]{24}(?:\.[a-z0-9]{1,8})?)$/);

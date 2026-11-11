@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>관리자 · (주) 이터널</title>
+  <title>관리자 · ONE PICK</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/admin.css">
@@ -18,8 +18,8 @@
   <header class="site-header">
     <div class="header-inner">
       <a class="logo" href="./">
-        <span class="logo-mark">E</span>
-        <span class="logo-text">(주) 이터널 <small class="admin-badge">관리자</small></span>
+        <span class="logo-mark">1</span>
+        <span class="logo-text">ONE PICK <small class="admin-badge">관리자</small></span>
       </a>
       <div class="header-actions">
         <button class="icon-btn" id="theme-toggle" type="button" aria-label="테마 변경"><span class="theme-label">White</span></button>
@@ -49,6 +49,7 @@
         <button type="button" role="tab" data-panel="broadcasts">방송 기록</button>
         <button type="button" role="tab" data-panel="sigs">시그 · 레슨 영상</button>
         <button type="button" role="tab" data-panel="files">파일</button>
+        <button type="button" role="tab" data-panel="brand">사이트 꾸미기</button>
         <button type="button" role="tab" data-panel="crews">크루 관리</button>
         <button type="button" role="tab" data-panel="requests">요청함 <span class="count" id="unread-count" hidden></span></button>
         <button type="button" role="tab" data-panel="account">내 계정</button>
@@ -207,6 +208,39 @@
             <tbody id="file-list"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- 사이트 꾸미기 -->
+      <section class="panel" data-view="brand" hidden>
+        <div class="panel-head"><h2>사이트 꾸미기</h2></div>
+        <p class="form-note" id="brand-note" aria-live="polite"></p>
+        <div class="brand-grid">
+          <div class="box">
+            <h3>로고 (프로필 사진)</h3>
+            <p class="hint">상단 왼쪽 ONE PICK 옆에 동그랗게 들어가고, 브라우저 탭 아이콘으로도 쓰입니다. 정사각형 이미지(500×500 이상)를 권장합니다.</p>
+            <div class="brand-preview is-logo" id="brand-logo"></div>
+            <div class="inline-form">
+              <label class="ghost-btn file-btn">이미지 선택<input type="file" data-brand-file="logo" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
+              <button type="button" class="mini-action danger" data-brand-del="logo">지우기</button>
+            </div>
+          </div>
+          <div class="box">
+            <h3>홈 배너</h3>
+            <p class="hint">홈 맨 위(라이브 시간 랭킹 위)에 들어갑니다. <b>1920×480 (가로:세로 4:1)</b> 크기가 딱 맞습니다. 비율이 다르면 가운데 기준으로 잘립니다.</p>
+            <div class="brand-preview is-banner" id="brand-banner"></div>
+            <div class="inline-form">
+              <label class="ghost-btn file-btn">이미지 선택<input type="file" data-brand-file="banner" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
+              <button type="button" class="mini-action danger" data-brand-del="banner">지우기</button>
+            </div>
+          </div>
+        </div>
+        <form class="box brand-links" id="brand-form">
+          <h3>링크</h3>
+          <label class="field">배너 클릭하면 열 주소 (비우면 클릭 안 됨)<input name="banner_link" type="url" placeholder="https://"></label>
+          <label class="field">하단 유튜브 로고 링크<input name="youtube_url" type="url" placeholder="https://www.youtube.com/@..."></label>
+          <label class="field">하단 SOOP 로고 링크<input name="soop_url" type="url" placeholder="https://www.sooplive.com/station/..."></label>
+          <button class="primary-btn" type="submit">저장</button>
+        </form>
       </section>
 
       <!-- 크루 관리 -->
