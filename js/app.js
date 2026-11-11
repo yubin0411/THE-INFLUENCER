@@ -32,7 +32,7 @@
     if (!crew || !site.crews.some((c) => c.id === crew)) return { crew: null, page: "home", channel: null };
     const page = PAGES.some((p) => p.id === m[2]) ? m[2] : PAGES[0].id;
     const channel = m[3] && decodeURIComponent(m[3]);
-    const valid = (page === "posts" || page === "shorts") && site.members.some((mb) => mb.id === channel && mb.crew === crew);
+    const valid = (page === "posts" || page === "shorts") && site.members.some((mb) => mb.id === channel && mb.crew === crew && mb.youtube);
     return { crew, page, channel: valid ? channel : null };
   }
 
@@ -45,6 +45,7 @@
     $("#home-view").hidden = !home;
     $("#page-view").hidden = home;
     if (home) {
+      renderRank();
       renderLive();
       renderCrewSections();
       renderHomeSigs();
@@ -266,7 +267,7 @@
 
   const liveCard = (l) => `
       <a class="live-card" href="${esc(l.url)}" target="_blank" rel="noopener">
-        <div class="thumb">${thumb(l.thumb, l.title)}<span class="badge-live">LIVE</span><span class="viewers">${(l.viewers || 0).toLocaleString()}명 시청</span></div>
+        <div class="thumb">${thumb(l.thumb, l.title)}<span class="badge-live">LIVE</span>${l.platform === "soop" ? '<span class="badge-platform soop">SOOP</span>' : ""}<span class="viewers">${(l.viewers || 0).toLocaleString()}명 시청</span></div>
         <div class="card-info"><strong>${esc(l.title)}</strong><span>${esc(l.member)}${l.crew ? ` · ${esc(crewName(l.crew))}` : ""}</span></div>
       </a>`;
 
@@ -286,6 +287,133 @@
     if (!b) return;
     liveFilter = b.dataset.live;
     renderLive();
+  });
+
+  /* ---------- 방송 시간 순위 ---------- */
+  let rank = null;          // 이번 달 순위 (홈 화면)
+  let rankView = null;      // 자세히 보기에서 보고 있는 달
+  let rankCrew = "all";
+  const MEDALS = ["1st", "2nd", "3rd"];
+  const monthLabel = (k) => `${Number(k.slice(0, 4))}년 ${Number(k.slice(5))}월`;
+  const fmtHours = (sec = 0) => {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    return h ? `${h}시간 ${m}분` : `${m}분`;
+  };
+  const fmtTime = (ms) => {
+    const d = new Date(ms);
+    return `${d.getMonth() + 1}.${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  const liveBadges = (it) =>
+    `${it.yt_live ? '<span class="badge-live inline">LIVE · 유튜브</span>' : ""}${it.soop_live ? '<span class="badge-live inline soop">LIVE · SOOP</span>' : ""}`;
+  const memberAvatar = (it, cls = "") =>
+    it.thumb ? `<img class="${cls}" src="${esc(it.thumb)}" alt="" loading="lazy">` : `<span class="${cls} member-avatar" aria-hidden="true"></span>`;
+
+  async function loadRanking() {
+    try { rank = await api("api/ranking"); } catch { return; }
+    if (current.page === "home") renderRank();
+    // 자세히 보기가 이번 달을 보고 있으면 같이 갱신
+    if ($("#modal-rank").open && rankView?.current) { rankView = rank; renderRankTable(); }
+  }
+
+  function renderRank() {
+    $("#home-rank").hidden = !rank || !rank.items.length;
+    if (!rank) return;
+    const top = rank.items.filter((it) => it.seconds > 0).slice(0, 3);
+    const live = rank.items.filter((it) => it.is_live).length;
+    $("#rank-note").textContent = `${monthLabel(rank.month)} · 1분마다 갱신${live ? ` · ${live}명 방송 중` : ""}`;
+    $("#rank-podium").innerHTML = top.length
+      ? top.map((it) => `
+        <li class="podium-card place-${it.rank > 3 ? 3 : it.rank}">
+          <button type="button" class="podium-btn" data-rank-open="${esc(it.id)}">
+            <span class="medal" aria-label="${it.rank}위">${MEDALS[it.rank - 1] || `${it.rank}th`}</span>
+            <span class="podium-avatar">${memberAvatar(it)}${it.is_live ? '<span class="badge-live">LIVE</span>' : ""}</span>
+            <strong class="podium-name">${esc(it.name)}</strong>
+            ${it.crew ? `<span class="podium-crew">${esc(crewName(it.crew))}</span>` : ""}
+            <span class="podium-time">${fmtHours(it.seconds)}</span>
+            <span class="podium-sub">방송 ${it.days}일 · ${it.sessions}회</span>
+          </button>
+        </li>`).join("")
+      : `<li class="podium-empty">${empty(`${monthLabel(rank.month)} 방송 기록이 아직 없어요. 멤버가 방송을 켜면 자동으로 집계됩니다.`)}</li>`;
+  }
+
+  async function openRanking(memberId) {
+    rankView = rank;
+    rankCrew = "all";
+    const sel = $("#rank-month");
+    sel.innerHTML = (rank?.months || []).map((k) => `<option value="${k}">${monthLabel(k)}</option>`).join("");
+    sel.value = rank?.month || "";
+    renderRankTable();
+    $("#modal-rank").showModal();
+    if (memberId) toggleSessions(memberId);
+  }
+
+  function renderRankTable() {
+    if (!rankView) return;
+    const crews = site.crews.filter((c) => rankView.items.some((it) => it.crew === c.id));
+    if (!crews.some((c) => c.id === rankCrew)) rankCrew = "all";
+    $("#rank-crew").innerHTML = crews.length > 1
+      ? [{ id: "all", name: "전체" }, ...crews].map((c) => `<button type="button" class="chip ${c.id === rankCrew ? "is-active" : ""}" data-rank-crew="${esc(c.id)}">${esc(c.name)}</button>`).join("")
+      : "";
+    const items = rankView.items.filter((it) => rankCrew === "all" || it.crew === rankCrew);
+    const total = items.reduce((a, it) => a + it.seconds, 0);
+    const active = items.filter((it) => it.seconds > 0).length;
+    $("#rank-summary").textContent = `${monthLabel(rankView.month)} · 방송한 멤버 ${active}/${items.length}명 · 합계 ${fmtHours(total)}${rankView.current ? " · 진행 중인 달" : ""}`;
+    $("#rank-list").innerHTML = items.length
+      ? items.map((it) => `
+        <tr class="clickable rank-row ${it.rank && it.rank <= 3 ? `top-${it.rank}` : ""}" data-rank-member="${esc(it.id)}" tabindex="0">
+          <td class="center"><span class="rank-num">${it.rank ?? "-"}</span></td>
+          <td><span class="rank-member">${memberAvatar(it, "rank-avatar")}<span><strong>${esc(it.name)}</strong>${it.crew ? `<small>${esc(crewName(it.crew))}</small>` : ""}</span></span></td>
+          <td class="num"><strong>${fmtHours(it.seconds)}</strong></td>
+          <td class="num">${it.days}일</td>
+          <td class="num">${it.sessions}회</td>
+          <td class="center">${liveBadges(it) || '<span class="muted">오프라인</span>'}</td>
+        </tr>`).join("")
+      : `<tr><td colspan="6">${empty("등록된 멤버가 없습니다.")}</td></tr>`;
+  }
+
+  async function toggleSessions(memberId) {
+    const row = $(`[data-rank-member="${CSS.escape(memberId)}"]`, $("#rank-list"));
+    if (!row) return;
+    const next = row.nextElementSibling;
+    if (next?.classList.contains("rank-sessions")) { next.remove(); return; }
+    const detail = document.createElement("tr");
+    detail.className = "rank-sessions";
+    detail.innerHTML = `<td colspan="6">${empty("불러오는 중…")}</td>`;
+    row.after(detail);
+    const month = rankView.month;
+    try {
+      const { items } = await api(`api/ranking/sessions?member=${encodeURIComponent(memberId)}&month=${month}`);
+      detail.firstElementChild.innerHTML = items.length
+        ? `<ul class="session-list">${items.map((b) => `
+            <li>
+              <span class="badge-platform ${b.platform}">${b.platform === "soop" ? "SOOP" : "YouTube"}</span>
+              <span class="session-title">${esc(b.title || "(제목 없음)")}</span>
+              <span class="session-time">${fmtTime(b.started_at)} ~ ${b.ended_at ? fmtTime(b.ended_at) : '<b class="on-air">방송 중</b>'}</span>
+              <span class="session-len">${fmtHours(b.seconds)}</span>
+            </li>`).join("")}</ul>`
+        : empty(`${monthLabel(month)}에는 방송 기록이 없습니다.`);
+    } catch {
+      detail.firstElementChild.innerHTML = empty("불러오지 못했습니다.");
+    }
+  }
+
+  document.addEventListener("click", (e) => {
+    const open = e.target.closest("[data-rank-open]");
+    if (open) return openRanking(open.dataset.rankOpen || null);
+    const crew = e.target.closest("[data-rank-crew]");
+    if (crew) { rankCrew = crew.dataset.rankCrew; return renderRankTable(); }
+    const row = e.target.closest("[data-rank-member]");
+    if (row) toggleSessions(row.dataset.rankMember);
+  });
+  $("#rank-list").addEventListener("keydown", (e) => {
+    const row = e.target.closest("[data-rank-member]");
+    if (row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleSessions(row.dataset.rankMember); }
+  });
+  $("#rank-month").addEventListener("change", async (e) => {
+    try {
+      rankView = await api(`api/ranking?month=${e.target.value}`);
+      renderRankTable();
+    } catch {}
   });
 
   /* ---------- 크루별 게시글 / 쇼츠 슬라이더 ---------- */
@@ -334,7 +462,8 @@
 
   /* ---------- 크루 페이지 ---------- */
   const list = { type: "post", crew: "", channel: "", before: null };
-  const channelUrl = (m) => `https://www.youtube.com/${m.handle ? m.handle : `channel/${m.id}`}`;
+  const channelUrl = (m) => `https://www.youtube.com/${m.handle ? m.handle : `channel/${m.youtube}`}`;
+  const soopUrl = (m) => `https://www.sooplive.co.kr/station/${encodeURIComponent(m.soop)}`;
   const avatar = (m) => (m.thumb ? `<img src="${esc(m.thumb)}" alt="" loading="lazy">` : `<span class="member-avatar" aria-hidden="true"></span>`);
 
   function renderPage() {
@@ -415,24 +544,25 @@
       body.innerHTML = members.length
         ? `<div class="member-grid">${members.map((m) => `
             <div class="member-card">
-              <a class="member-main" href="${pageHref(crew, "posts", m.id)}">
+              <a class="member-main" href="${m.youtube ? pageHref(crew, "posts", m.id) : esc(soopUrl(m))}" ${m.youtube ? "" : 'target="_blank" rel="noopener"'}>
                 ${avatar(m)}
                 ${m.is_live ? '<span class="badge-live">LIVE</span>' : ""}
                 <strong>${esc(m.name)}</strong>
               </a>
               <span class="member-links">
-                <a href="${pageHref(crew, "posts", m.id)}">게시글</a>
+                ${m.youtube ? `<a href="${pageHref(crew, "posts", m.id)}">게시글</a>
                 <a href="${pageHref(crew, "shorts", m.id)}">쇼츠</a>
-                <a href="${esc(channelUrl(m))}" target="_blank" rel="noopener">유튜브 ↗</a>
+                <a href="${esc(channelUrl(m))}" target="_blank" rel="noopener">유튜브 ↗</a>` : ""}
+                ${m.soop ? `<a href="${esc(soopUrl(m))}" target="_blank" rel="noopener">SOOP ↗</a>` : ""}
               </span>
             </div>`).join("")}</div>`
-        : empty("등록된 멤버가 없습니다. 관리자 페이지의 유튜브 채널에서 이 크루로 채널을 추가하세요.");
+        : empty("등록된 멤버가 없습니다. 관리자 페이지의 방송 채널에서 이 크루로 채널을 추가하세요.");
     } else if (page === "live") {
       const lives = liveNow.filter((l) => l.crew === crew);
       body.innerHTML = lives.length ? `<div class="live-grid">${lives.map(liveCard).join("")}</div>` : empty("지금 방송 중인 멤버가 없습니다.");
     } else if (page === "posts" || page === "shorts") {
       Object.assign(list, { type: page === "shorts" ? "short" : "post", crew, channel: channel || "", before: null });
-      const members = site.members.filter((m) => m.crew === crew);
+      const members = site.members.filter((m) => m.crew === crew && m.youtube);
       const chips = members.length > 1 || channel
         ? `<nav class="member-chips" aria-label="계정별 보기">
              <a href="${pageHref(crew, page)}" class="${channel ? "" : "is-current"}">전체</a>
@@ -609,7 +739,8 @@
     renderHomeSigs = sigTable({ search: $("#sig-search"), body: $("#sig-list"), pager: $("#sig-pages"), rows: () => sigs, sort: () => "new", showCrew: true });
     route();
     loadLive();
-    setInterval(loadLive, REFRESH_MS);
+    loadRanking();
+    setInterval(() => { loadLive(); loadRanking(); }, REFRESH_MS);
     // 새 영상 반영 (홈 화면에서만)
     setInterval(() => { if (current.page === "home") loadSliders(); }, REFRESH_MS * 5);
   });

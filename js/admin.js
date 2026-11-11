@@ -14,7 +14,9 @@
     $("#admin-view").hidden = !isAdmin;
     $("#logout-btn").hidden = !user;
     if (user && !isAdmin) $(".form-note", $("#admin-login")).textContent = "관리자 계정이 아닙니다.";
-    if (isAdmin) await Promise.all([loadCrews(), loadUsers(), loadCodes(), loadChannels(), loadRequests()]);
+    if (!isAdmin) return;
+    await loadCrews(); // 채널 · 방송 기록의 크루 표시에 필요
+    await Promise.all([loadUsers(), loadCodes(), loadChannels(), loadRequests()]);
   }
 
   $("#admin-login").addEventListener("submit", async (e) => {
@@ -531,8 +533,16 @@
   });
 
   /* ---------- 유튜브 채널 ---------- */
+  let ytChannels = [];
+  const ytOptions = (selected) => `<option value="">(연결 안 함)</option>` +
+    ytChannels.map((c) => `<option value="${esc(c.id)}" ${c.id === selected ? "selected" : ""}>${esc(c.name || c.title)}</option>`).join("");
+
   async function loadChannels() {
     const channels = await api("api/admin/channels");
+    ytChannels = channels;
+    $$(".yt-select").forEach((s) => (s.innerHTML = ytOptions(s.value)));
+    loadSoop();
+    loadBroadcasts();
     $("#channel-list").innerHTML = channels.length
       ? channels.map((c) => `
         <article class="channel-card" data-channel="${esc(c.id)}">
@@ -593,8 +603,147 @@
     $("#channel-note").textContent = "새로고침 중…";
     await api("api/admin/sync", {});
     $("#channel-note").textContent = "새로고침 완료";
-    await loadChannels();
+    await Promise.all([loadChannels(), loadBroadcasts()]);
   }));
+
+  /* ---------- SOOP 방송국 ---------- */
+  async function loadSoop() {
+    const list = await api("api/admin/soop");
+    $("#soop-list").innerHTML = list.length
+      ? list.map((c) => `
+        <article class="channel-card soop-card" data-soop="${esc(c.id)}">
+          ${c.thumb ? `<img class="channel-thumb" src="${esc(c.thumb)}" alt="">` : '<div class="channel-thumb"></div>'}
+          <div class="channel-info">
+            <a href="https://www.sooplive.co.kr/station/${esc(c.id)}" target="_blank" rel="noopener"><strong>${esc(c.nick || c.id)}</strong></a>
+            <span>${esc(c.id)}</span>
+            <span class="channel-stats">
+              ${c.live ? `<span class="badge-live soop">LIVE</span> ${esc(c.title)}` : `확인 ${c.checked_at ? fmtAgo(c.checked_at) : "-"}`}
+            </span>
+          </div>
+          <label class="field">같은 사람 유튜브<select class="cell-input" name="youtube">${ytOptions(c.youtube_id)}</select></label>
+          <label class="field">멤버 이름<input class="cell-input" name="name" value="${esc(c.name)}" maxlength="30" placeholder="${esc(c.youtube_id ? "유튜브 멤버 이름 사용" : c.nick)}"></label>
+          <label class="field">크루<select class="cell-input" name="crew">${crewOptions(c.crew_id)}</select></label>
+          <div class="actions">
+            <button type="button" class="mini-action ok" data-save>저장</button>
+            <button type="button" class="mini-action danger" data-delete>삭제</button>
+          </div>
+        </article>`).join("")
+      : '<div class="empty">등록된 SOOP 방송국이 없습니다.</div>';
+  }
+
+  $("#soop-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const btn = $('[type="submit"]', e.target);
+    const note = $("#soop-note");
+    btn.disabled = true;
+    note.textContent = "방송국 확인 중…";
+    try {
+      const r = await api("api/admin/soop", Object.fromEntries(new FormData(e.target)));
+      e.target.reset();
+      note.textContent = r.message;
+      await Promise.all([loadSoop(), loadBroadcasts()]);
+    } catch (err) {
+      note.textContent = err.message;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  $("#soop-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const card = btn.closest("[data-soop]");
+    const id = encodeURIComponent(card.dataset.soop);
+    if (btn.hasAttribute("data-delete")) {
+      if (!confirmClick(btn)) return;
+      return act(btn, async () => { await api(`api/admin/soop/${id}`, { action: "delete" }); await Promise.all([loadSoop(), loadBroadcasts()]); });
+    }
+    act(btn, async () => {
+      await api(`api/admin/soop/${id}`, {
+        youtube: $('[name="youtube"]', card).value, name: $('[name="name"]', card).value, crew: $('[name="crew"]', card).value,
+      });
+      $("#soop-note").textContent = "저장했습니다.";
+      await Promise.all([loadSoop(), loadBroadcasts()]);
+    });
+  });
+
+  /* ---------- 방송 기록 (월별 방송 시간) ---------- */
+  let bc = null;
+  const monthLabel = (k) => `${Number(k.slice(0, 4))}년 ${Number(k.slice(5))}월`;
+  const fmtHours = (sec = 0) => {
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    return h ? `${h}시간 ${m}분` : `${m}분`;
+  };
+  const fmtDT = (ms) => {
+    const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
+    return `${d.getMonth() + 1}.${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const crewLabel = (id) => crews.find((c) => c.id === id)?.name || "";
+
+  async function loadBroadcasts(month) {
+    const sel = $("#bc-month");
+    month = month || sel.value || "";
+    try {
+      bc = await api(`api/ranking${month ? `?month=${month}` : ""}`);
+    } catch (err) {
+      $("#bc-note").textContent = err.message;
+      return;
+    }
+    sel.innerHTML = bc.months.map((k) => `<option value="${k}">${monthLabel(k)}</option>`).join("");
+    sel.value = bc.month;
+    const total = bc.items.reduce((a, it) => a + it.seconds, 0);
+    $("#bc-note").textContent = `${monthLabel(bc.month)} · 방송한 멤버 ${bc.items.filter((it) => it.seconds).length}/${bc.items.length}명 · 합계 ${fmtHours(total)}`;
+    $("#bc-list").innerHTML = bc.items.length
+      ? bc.items.map((it) => `
+        <tr class="bc-row" data-bc-member="${esc(it.id)}">
+          <td class="center"><strong>${it.rank ?? "-"}</strong></td>
+          <td><strong>${esc(it.name)}</strong></td>
+          <td>${esc(crewLabel(it.crew))}</td>
+          <td>${it.youtube ? '<span class="badge-platform">YouTube</span> ' : ""}${it.soop ? '<span class="badge-platform soop">SOOP</span>' : ""}</td>
+          <td class="num"><strong>${fmtHours(it.seconds)}</strong></td>
+          <td class="num">${it.days}일</td>
+          <td class="num">${it.sessions}회</td>
+          <td>${it.is_live ? '<span class="badge-live" style="position:static">방송 중</span>' : '<span class="muted">-</span>'}</td>
+        </tr>`).join("")
+      : '<tr><td colspan="8"><div class="empty">등록된 멤버가 없습니다. 방송 채널 탭에서 유튜브 채널이나 SOOP 방송국을 추가하세요.</div></td></tr>';
+  }
+
+  $("#bc-month").addEventListener("change", (e) => loadBroadcasts(e.target.value));
+
+  $("#bc-list").addEventListener("click", async (e) => {
+    const row = e.target.closest("[data-bc-member]");
+    if (!row) return;
+    if (row.nextElementSibling?.classList.contains("bc-sessions")) return row.nextElementSibling.remove();
+    const tr = document.createElement("tr");
+    tr.className = "bc-sessions";
+    tr.innerHTML = '<td colspan="8">불러오는 중…</td>';
+    row.after(tr);
+    try {
+      const { items } = await api(`api/ranking/sessions?member=${encodeURIComponent(row.dataset.bcMember)}&month=${bc.month}`);
+      tr.firstElementChild.innerHTML = items.length
+        ? `<ul>${items.map((b) => `<li>
+            <span class="badge-platform ${b.platform}">${b.platform === "soop" ? "SOOP" : "YouTube"}</span>
+            <span class="t">${esc(b.title || "(제목 없음)")}</span>
+            <span class="muted">${fmtDT(b.started_at)} ~ ${b.ended_at ? fmtDT(b.ended_at) : "방송 중"}</span>
+            <strong>${fmtHours(b.seconds)}</strong></li>`).join("")}</ul>`
+        : "이 달에는 방송 기록이 없습니다.";
+    } catch (err) {
+      tr.firstElementChild.textContent = err.message;
+    }
+  });
+
+  // 엑셀에서 바로 열리는 CSV (한글 깨짐 방지 BOM)
+  $("#bc-csv").addEventListener("click", () => {
+    if (!bc) return;
+    const cell = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = [["순위", "멤버", "크루", "유튜브", "SOOP", "방송 시간(시간)", "방송 시간", "방송일", "방송 횟수"]]
+      .concat(bc.items.map((it) => [it.rank ?? "", it.name, crewLabel(it.crew), it.youtube || "", it.soop || "",
+        (it.seconds / 3600).toFixed(2), fmtHours(it.seconds), it.days, it.sessions]));
+    const blob = new Blob(["\ufeff" + rows.map((r) => r.map(cell).join(",")).join("\r\n")], { type: "text/csv;charset=utf-8" });
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `방송시간_${bc.month}.csv` });
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  });
 
   /* ---------- 요청함 ---------- */
   async function loadRequests() {

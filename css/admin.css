@@ -146,3 +146,18 @@ a.lesson-title:hover { text-decoration: underline; }
 
 .backup-box { margin-top: 28px; }
 .backup-box .inline-form { align-items: flex-end; }
+
+/* SOOP · 방송 기록 */
+.soop-head { margin-top: 32px; }
+.soop-card .channel-thumb { box-shadow: 0 0 0 2px #0545b1; }
+.soop-card { grid-template-columns: 52px minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) auto; }
+.head-tools { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.bc-row { cursor: pointer; }
+.bc-sessions td { background: var(--surface-2); font-size: 13px; }
+.bc-sessions ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
+.bc-sessions li { display: flex; gap: 10px; align-items: center; }
+.bc-sessions .t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 800px) { .soop-card { grid-template-columns: 44px 1fr; } }
+/* 입력칸이 기본 너비 때문에 옆 칸과 겹치지 않도록 */
+.inline-form .field input, .inline-form .field select { width: 100%; min-width: 0; }
+#bc-note { color: var(--muted); }
