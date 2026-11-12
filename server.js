@@ -249,14 +249,25 @@ route("POST", "/api/auth/signup", async (req) => {
   const nickname = str(b.nickname, 30);
   const password = String(b.password || "");
   const code = str(b.code, 50);
+  const info = {
+    real_name: str(b.real_name, 30), alias: str(b.alias, 30),
+    phone: String(b.phone ?? "").replace(/[^\d]/g, "").slice(0, 11),
+    bank: str(b.bank, 20), account: String(b.account ?? "").replace(/[^\d-]/g, "").slice(0, 30),
+  };
   if (!/^[a-zA-Z0-9_]{4,30}$/.test(username)) fail(400, "아이디는 영문/숫자/_ 4~30자로 입력하세요.");
   if (password.length < 8) fail(400, "비밀번호는 8자 이상으로 입력하세요.");
-  if (!nickname) fail(400, "닉네임을 입력하세요.");
+  if (!nickname) fail(400, "이름(활동명)을 입력하세요.");
+  if (!info.real_name) fail(400, "본명을 입력하세요.");
+  if (!info.alias) fail(400, "가명을 입력하세요.");
+  if (!/^01\d{8,9}$/.test(info.phone)) fail(400, "전화번호를 정확히 입력하세요. (예: 010-1234-5678)");
+  if (!info.bank) fail(400, "은행을 입력하세요.");
+  if (info.account.replace(/-/g, "").length < 8) fail(400, "계좌번호를 정확히 입력하세요.");
   const c = db.prepare("SELECT * FROM codes WHERE code = ? AND active = 1").get(code);
   if (!c || (c.max_uses != null && c.uses >= c.max_uses)) fail(400, "승인코드가 올바르지 않습니다.");
   if (db.prepare("SELECT 1 FROM users WHERE username = ?").get(username)) fail(409, "이미 사용 중인 아이디입니다.");
-  db.prepare("INSERT INTO users (username, nickname, pw_hash, code, created_at) VALUES (?, ?, ?, ?, ?)")
-    .run(username, nickname, auth.hashPassword(password), code, Date.now());
+  db.prepare(`INSERT INTO users (username, nickname, pw_hash, code, created_at, real_name, alias, phone, bank, account)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    .run(username, nickname, auth.hashPassword(password), code, Date.now(), info.real_name, info.alias, info.phone, info.bank, info.account);
   db.prepare("UPDATE codes SET uses = uses + 1 WHERE code = ?").run(code);
   return { ok: true, message: "가입 신청이 완료되었습니다. 관리자 승인 후 로그인할 수 있습니다." };
 });
@@ -269,7 +280,7 @@ route("POST", "/api/auth/login", async (req, _p, _u, res) => {
   if (u.status === "pending") fail(403, "관리자 승인 대기 중입니다.");
   if (u.status !== "approved") fail(403, "가입이 거절된 계정입니다.");
   auth.createSession(res, req, u.id);
-  return { user: { id: u.id, username: u.username, nickname: u.nickname, role: u.role } };
+  return { user: { id: u.id, username: u.username, nickname: u.nickname, role: u.role, member_id: u.member_id } };
 });
 
 route("POST", "/api/auth/logout", (req, _p, _u, res) => {
@@ -287,7 +298,7 @@ route("POST", "/api/auth/password", async (req) => {
   return { ok: true };
 });
 
-// 추천 노래 / 백월 요청 (승인된 회원만)
+// 시그 요청 / 백월 요청 (승인된 회원만, 백월은 예전 요청만 남아 있음)
 route("POST", "/api/requests", async (req) => {
   const user = requireUser(req);
   const b = await readJson(req);
@@ -312,14 +323,25 @@ route("POST", "/api/requests", async (req) => {
 /* ---------- 관리자 ---------- */
 route("GET", "/api/admin/users", (req) => {
   requireAdmin(req);
-  return db.prepare("SELECT id, username, nickname, role, status, code, created_at FROM users ORDER BY status = 'pending' DESC, created_at DESC").all();
+  return db.prepare(`SELECT u.id, u.username, u.nickname, u.role, u.status, u.code, u.created_at,
+      u.real_name, u.alias, u.phone, u.bank, u.account, u.member_id, m.name AS member_name
+    FROM users u LEFT JOIN members m ON m.id = u.member_id
+    ORDER BY u.status = 'pending' DESC, u.created_at DESC`).all();
 });
 
 route("POST", "/api/admin/users/:id", async (req, p) => {
   const me = requireAdmin(req);
   const b = await readJson(req);
   const id = Number(p.id);
-  if (id === me.id) fail(400, "본인 계정은 변경할 수 없습니다.");
+  if (id === me.id && !("member_id" in b)) fail(400, "본인 계정은 변경할 수 없습니다.");
+  if ("member_id" in b) {
+    // 회원 ↔ 멤버 연결 (멤버 하나에는 회원 한 명만)
+    const mid = b.member_id ? memberRow(b.member_id).id : null;
+    const other = mid && db.prepare("SELECT username FROM users WHERE member_id = ? AND id != ?").get(mid, Number(p.id));
+    if (other) fail(409, `이 멤버는 이미 ${other.username} 회원에게 연결되어 있습니다.`);
+    db.prepare("UPDATE users SET member_id = ? WHERE id = ?").run(mid, Number(p.id));
+    return { ok: true };
+  }
   if (b.action === "delete") {
     db.prepare("DELETE FROM users WHERE id = ?").run(id);
   } else if (["approved", "rejected", "pending"].includes(b.status)) {
@@ -461,6 +483,7 @@ route("POST", "/api/admin/members", async (req) => {
 route("POST", "/api/admin/members/:id/delete", (req, p) => {
   requireAdmin(req);
   const m = memberRow(p.id);
+  if (db.prepare("SELECT 1 FROM settle_entries WHERE member_id = ?").get(m.id)) fail(400, "정산 기록이 있는 멤버는 지울 수 없습니다. (정산 내역이 같이 지워지는 것을 막기 위해)");
   removeStored([m.photo && `members/${m.photo}`, m.promise_image && `members/${m.promise_image}`]);
   tx(() => {
     db.prepare("DELETE FROM channels WHERE member_id = ?").run(m.id);
@@ -602,6 +625,285 @@ route("POST", "/api/admin/requests/:id", async (req, p) => {
     db.prepare("DELETE FROM requests WHERE id = ?").run(Number(p.id));
   } else db.prepare("UPDATE requests SET is_read = ? WHERE id = ?").run(b.read ? 1 : 0, Number(p.id));
   return { ok: true };
+});
+
+/* ---------- 내 멤버 (회원에게 연결된 멤버를 본인이 편집) ---------- */
+// 연결된 멤버만 다룸 — 멤버 번호를 요청에서 받지 않으므로 다른 사람 멤버는 고칠 수 없음
+function myMember(req) {
+  const u = requireUser(req);
+  const id = db.prepare("SELECT member_id FROM users WHERE id = ?").get(u.id)?.member_id;
+  if (!id) fail(403, "연결된 멤버가 없습니다. 관리자에게 멤버 연결을 요청하세요.");
+  return memberRow(id);
+}
+
+route("GET", "/api/me/member", (req) => {
+  const m = myMember(req);
+  return {
+    id: m.id, name: m.name, crew: m.crew_id, quote: m.quote, instagram: m.instagram, kakao: m.kakao,
+    profile_text: m.profile_text, promise_text: m.promise_text, sig_ids: JSON.parse(m.sig_ids || "[]"),
+    photo_url: broadcasts.photoUrl(m.photo), promise_url: broadcasts.photoUrl(m.promise_image),
+  };
+});
+
+// 본인이 고칠 수 있는 칸: 한마디 · 인스타 · 카톡 · 프로필 · 공약 · 대표 시그 (이름 · 크루 · 채널은 관리자만)
+route("POST", "/api/me/member", async (req) => {
+  const m = myMember(req);
+  const b = await readJson(req);
+  const sigIds = [...new Set((Array.isArray(b.sig_ids) ? b.sig_ids : []).map(Number).filter(Number.isInteger))].slice(0, 100);
+  db.prepare(`UPDATE members SET quote = ?, instagram = ?, kakao = ?, profile_text = ?, promise_text = ?, sig_ids = ?, updated_at = ? WHERE id = ?`)
+    .run(str(b.quote, 100), linkUrl(b.instagram), linkUrl(b.kakao), str(b.profile_text, 3000), str(b.promise_text, 3000), JSON.stringify(sigIds), Date.now(), m.id);
+  return { ok: true };
+});
+
+route("POST", "/api/me/member/image", async (req, _p, url) => {
+  const m = myMember(req);
+  const col = url.searchParams.get("kind") === "promise" ? "promise_image" : "photo";
+  const up = await saveUpload(req, "members");
+  if (!IMAGE_EXT.test(up.file) || up.size > 20 * 1024 * 1024) {
+    removeStored([`members/${up.file}`]);
+    fail(400, "이미지(jpg, png, gif, webp) 20MB 이하만 올릴 수 있습니다.");
+  }
+  removeStored([m[col] && `members/${m[col]}`]);
+  db.prepare(`UPDATE members SET ${col} = ?, updated_at = ? WHERE id = ?`).run(up.file, Date.now(), m.id);
+  return { ok: true };
+});
+route("POST", "/api/me/member/image/delete", async (req) => {
+  const m = myMember(req);
+  const b = await readJson(req);
+  const col = b.kind === "promise" ? "promise_image" : "photo";
+  removeStored([m[col] && `members/${m[col]}`]);
+  db.prepare(`UPDATE members SET ${col} = NULL, updated_at = ? WHERE id = ?`).run(Date.now(), m.id);
+  return { ok: true };
+});
+
+/* ---------- 정산 ---------- */
+// 계산 순서: 후원금 − 플랫폼 수수료 → (세금) → 회사와 분배
+//   tax_mode = "before": 수수료 뗀 금액에서 세금을 먼저 떼고 나눔
+//   tax_mode = "after" : 나눈 뒤 멤버 몫에서만 세금을 뗌
+const DEFAULT_TERMS = { fee_soop: 0, fee_yt_account: 0, fee_yt_web: 0, tax: 3.3, tax_mode: "before", share_excel: 50, share_personal: 50 };
+const SOURCES = ["soop", "yt_account", "yt_web"];
+const pct = (v, def) => {
+  const n = Number(String(v ?? "").replace(/[^\d.]/g, ""));
+  return v === "" || v == null || !Number.isFinite(n) ? def : Math.min(100, Math.max(0, Math.round(n * 100) / 100));
+};
+function cleanTerms(t = {}, base = DEFAULT_TERMS) {
+  const out = {};
+  for (const k of Object.keys(DEFAULT_TERMS)) out[k] = k === "tax_mode" ? (t.tax_mode === "after" ? "after" : t.tax_mode === "before" ? "before" : base.tax_mode) : pct(t[k], base[k]);
+  return out;
+}
+const defaultTerms = () => cleanTerms(JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'settle_default'").get()?.value || "{}"));
+const memberTerms = (m) => (m.settle_terms ? cleanTerms(JSON.parse(m.settle_terms), defaultTerms()) : defaultTerms());
+
+function calcSettle(e, terms) {
+  const by = {};
+  let gross = 0, fee = 0;
+  for (const s of SOURCES) {
+    const g = Number(e[s]) || 0;
+    const f = Math.round((g * terms[`fee_${s}`]) / 100);
+    by[s] = { gross: g, fee: f, net: g - f };
+    gross += g; fee += f;
+  }
+  const afterFee = gross - fee;
+  const share = e.kind === "excel" ? terms.share_excel : terms.share_personal;
+  let tax, member, company;
+  if (terms.tax_mode === "after") {
+    const memberGross = Math.round((afterFee * share) / 100);
+    company = afterFee - memberGross;
+    tax = Math.round((memberGross * terms.tax) / 100);
+    member = memberGross - tax;
+  } else {
+    tax = Math.round((afterFee * terms.tax) / 100);
+    const net = afterFee - tax;
+    member = Math.round((net * share) / 100);
+    company = net - member;
+  }
+  return { by, gross, fee, after_fee: afterFee, tax, share, company, member };
+}
+
+const entryView = (e, m) => {
+  const terms = e.terms ? JSON.parse(e.terms) : memberTerms(m);
+  return {
+    id: e.id, kind: e.kind, month: e.month, round_id: e.round_id, season: e.season ?? null, round: e.round ?? null,
+    round_title: e.round_title ?? "", held_on: e.held_on ?? null,
+    soop: e.soop, yt_account: e.yt_account, yt_web: e.yt_web, memo: e.memo, paid_at: e.paid_at,
+    terms, calc: calcSettle(e, terms),
+  };
+};
+const ENTRY_SELECT = `SELECT e.*, r.season, r.round, r.title AS round_title, r.held_on
+  FROM settle_entries e LEFT JOIN excel_rounds r ON r.id = e.round_id`;
+
+// 월별로 묶기 (최근 달 먼저)
+function byMonth(list) {
+  const months = new Map();
+  for (const e of list) {
+    if (!months.has(e.month)) months.set(e.month, { month: e.month, gross: 0, fee: 0, tax: 0, company: 0, member: 0, paid: true, entries: [] });
+    const g = months.get(e.month);
+    for (const k of ["gross", "fee", "tax", "company", "member"]) g[k] += e.calc[k];
+    g.paid = g.paid && !!e.paid_at;
+    g.entries.push(e);
+  }
+  return [...months.values()].sort((a, b) => b.month.localeCompare(a.month));
+}
+
+// 내 정산 (본인 멤버 것만)
+route("GET", "/api/me/settle", (req) => {
+  const m = myMember(req);
+  const list = db.prepare(`${ENTRY_SELECT} WHERE e.member_id = ? ORDER BY e.month DESC, e.kind, r.season DESC, r.round DESC`).all(m.id).map((e) => entryView(e, m));
+  const months = byMonth(list);
+  const sum = (f) => months.reduce((a, g) => a + f(g), 0);
+  return {
+    member: { id: m.id, name: m.name },
+    terms: memberTerms(m),
+    total: { gross: sum((g) => g.gross), member: sum((g) => g.member), paid: sum((g) => g.entries.filter((e) => e.paid_at).reduce((a, e) => a + e.calc.member, 0)) },
+    months,
+  };
+});
+
+// 관리자: 회차 목록 · 기본 조건 · 멤버별 조건
+route("GET", "/api/admin/settle", (req) => {
+  requireAdmin(req);
+  const users = db.prepare("SELECT member_id, username, nickname, real_name, bank, account FROM users WHERE member_id IS NOT NULL").all();
+  return {
+    rounds: db.prepare("SELECT * FROM excel_rounds ORDER BY season DESC, round DESC").all(),
+    default_terms: defaultTerms(),
+    members: db.prepare("SELECT id, name, crew_id, settle_terms FROM members ORDER BY sort, name").all().map((m) => ({
+      id: m.id, name: m.name, crew: m.crew_id, custom: !!m.settle_terms, terms: memberTerms(m),
+      user: users.find((u) => u.member_id === m.id) || null,
+    })),
+  };
+});
+
+// 정산 칸: ?kind=excel&round=ID | ?kind=personal&month=YYYY-MM | ?kind=month&month=YYYY-MM (그 달 전체 합계)
+const MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+route("GET", "/api/admin/settle/entries", (req, _p, url) => {
+  requireAdmin(req);
+  const kind = url.searchParams.get("kind");
+  const members = new Map(db.prepare("SELECT * FROM members").all().map((m) => [m.id, m]));
+  let rows;
+  if (kind === "excel") rows = db.prepare(`${ENTRY_SELECT} WHERE e.kind = 'excel' AND e.round_id = ?`).all(Number(url.searchParams.get("round")));
+  else {
+    const month = url.searchParams.get("month");
+    if (!MONTH_RE.test(month || "")) fail(400, "달을 고르세요.");
+    rows = kind === "personal"
+      ? db.prepare(`${ENTRY_SELECT} WHERE e.kind = 'personal' AND e.month = ?`).all(month)
+      : db.prepare(`${ENTRY_SELECT} WHERE e.month = ? ORDER BY e.kind, r.season, r.round`).all(month);
+  }
+  return rows.filter((e) => members.has(e.member_id)).map((e) => ({ member_id: e.member_id, ...entryView(e, members.get(e.member_id)) }));
+});
+
+// 엑셀 회차 만들기 / 고치기 / 지우기
+route("POST", "/api/admin/settle/rounds", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  if (b.action === "delete") {
+    if (db.prepare("SELECT 1 FROM settle_entries WHERE round_id = ? AND paid_at IS NOT NULL").get(Number(b.id))) fail(400, "지급 완료된 정산이 있는 회차는 지울 수 없습니다.");
+    db.prepare("DELETE FROM excel_rounds WHERE id = ?").run(Number(b.id));
+    return { ok: true };
+  }
+  const season = Number(b.season), round = Number(b.round);
+  if (!(season >= 1 && season <= 999) || !(round >= 1 && round <= 999)) fail(400, "시즌과 회차는 1 이상 숫자로 넣으세요.");
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(b.held_on || "")) fail(400, "방송 날짜를 고르세요.");
+  const title = str(b.title, 60);
+  try {
+    if (b.id) {
+      db.prepare("UPDATE excel_rounds SET season = ?, round = ?, title = ?, held_on = ? WHERE id = ?").run(season, round, title, b.held_on, Number(b.id));
+      db.prepare("UPDATE settle_entries SET month = ? WHERE round_id = ?").run(b.held_on.slice(0, 7), Number(b.id));
+      return { ok: true, id: Number(b.id) };
+    }
+    const r = db.prepare("INSERT INTO excel_rounds (season, round, title, held_on, created_at) VALUES (?, ?, ?, ?, ?)").run(season, round, title, b.held_on, Date.now());
+    return { ok: true, id: Number(r.lastInsertRowid) };
+  } catch (e) {
+    if (/UNIQUE/.test(e.message)) fail(409, `${season}시즌 ${round}회차는 이미 있습니다.`);
+    throw e;
+  }
+});
+
+// 금액 저장 (직접 입력 · 시트 업로드 공용). 금액이 모두 0이고 메모도 없으면 그 칸을 지움. 지급 완료된 칸은 안 바꿈
+const won = (v) => Math.max(0, Math.round(Number(String(v ?? "").replace(/[^\d.-]/g, "")) || 0));
+route("POST", "/api/admin/settle/entries", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req, 20 * 1024 * 1024);
+  let roundId = null, month;
+  if (b.kind === "excel") {
+    const r = db.prepare("SELECT * FROM excel_rounds WHERE id = ?").get(Number(b.round)) || fail(400, "회차를 고르세요.");
+    roundId = r.id; month = r.held_on.slice(0, 7);
+  } else if (b.kind === "personal") {
+    month = MONTH_RE.test(b.month || "") ? b.month : fail(400, "달을 고르세요.");
+  } else fail(400, "잘못된 요청입니다.");
+  const rows = Array.isArray(b.rows) ? b.rows.slice(0, 5000) : [];
+  const now = Date.now();
+  const find = b.kind === "excel"
+    ? db.prepare("SELECT id, paid_at FROM settle_entries WHERE kind = 'excel' AND member_id = ? AND round_id = ?")
+    : db.prepare("SELECT id, paid_at FROM settle_entries WHERE kind = 'personal' AND member_id = ? AND month = ?");
+  const stat = { saved: 0, removed: 0, skipped_paid: 0, unknown: 0 };
+  tx(() => {
+    for (const r of rows) {
+      const mid = Number(r.member_id);
+      if (!db.prepare("SELECT 1 FROM members WHERE id = ?").get(mid)) { stat.unknown++; continue; }
+      const v = { soop: won(r.soop), yt_account: won(r.yt_account), yt_web: won(r.yt_web), memo: str(r.memo, 200) };
+      const old = find.get(mid, b.kind === "excel" ? roundId : month);
+      if (old?.paid_at) { stat.skipped_paid++; continue; }
+      const empty = !v.soop && !v.yt_account && !v.yt_web && !v.memo;
+      if (empty) {
+        if (old) { db.prepare("DELETE FROM settle_entries WHERE id = ?").run(old.id); stat.removed++; }
+        continue;
+      }
+      if (old) db.prepare("UPDATE settle_entries SET soop = ?, yt_account = ?, yt_web = ?, memo = ?, month = ?, updated_at = ? WHERE id = ?")
+        .run(v.soop, v.yt_account, v.yt_web, v.memo, month, now, old.id);
+      else db.prepare(`INSERT INTO settle_entries (member_id, kind, round_id, month, soop, yt_account, yt_web, memo, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(mid, b.kind, roundId, month, v.soop, v.yt_account, v.yt_web, v.memo, now, now);
+      stat.saved++;
+    }
+  });
+  return { ok: true, ...stat };
+});
+
+// 지급 완료 처리 (그 달 그 멤버의 정산 전부). 완료할 때 조건을 같이 저장해 두어 나중에 조건을 바꿔도 금액이 안 바뀜
+route("POST", "/api/admin/settle/paid", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  if (!MONTH_RE.test(b.month || "")) fail(400, "달을 고르세요.");
+  const ids = (Array.isArray(b.member_ids) ? b.member_ids : []).map(Number).filter(Number.isInteger);
+  tx(() => {
+    for (const id of ids) {
+      if (b.paid) {
+        const m = db.prepare("SELECT * FROM members WHERE id = ?").get(id);
+        if (!m) continue;
+        db.prepare("UPDATE settle_entries SET paid_at = ?, terms = ? WHERE member_id = ? AND month = ? AND paid_at IS NULL")
+          .run(Date.now(), JSON.stringify(memberTerms(m)), id, b.month);
+      } else db.prepare("UPDATE settle_entries SET paid_at = NULL, terms = NULL WHERE member_id = ? AND month = ?").run(id, b.month);
+    }
+  });
+  return { ok: true };
+});
+
+// 정산 조건: member_id 가 없으면 기본 조건, reset 이면 그 멤버를 기본 조건으로 되돌림
+route("POST", "/api/admin/settle/terms", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req);
+  if (b.member_id == null) {
+    setSetting("settle_default", JSON.stringify(cleanTerms(b.terms)));
+    return { ok: true };
+  }
+  const m = memberRow(b.member_id);
+  db.prepare("UPDATE members SET settle_terms = ? WHERE id = ?").run(b.reset ? null : JSON.stringify(cleanTerms(b.terms, defaultTerms())), m.id);
+  return { ok: true };
+});
+
+// 정산 조건 한 번에 (시트 업로드)
+route("POST", "/api/admin/settle/terms/bulk", async (req) => {
+  requireAdmin(req);
+  const b = await readJson(req, 20 * 1024 * 1024);
+  let saved = 0;
+  const def = defaultTerms();
+  tx(() => {
+    for (const r of (Array.isArray(b.rows) ? b.rows : []).slice(0, 5000)) {
+      if (!db.prepare("SELECT 1 FROM members WHERE id = ?").get(Number(r.member_id))) continue;
+      db.prepare("UPDATE members SET settle_terms = ? WHERE id = ?").run(JSON.stringify(cleanTerms(r.terms, def)), Number(r.member_id));
+      saved++;
+    }
+  });
+  return { ok: true, saved };
 });
 
 /* ---------- 시그 · 레슨 영상 · 파일 ---------- */
@@ -1011,7 +1313,7 @@ route("POST", "/api/admin/files/:id/delete", (req, p) => {
 
 /* ---------- 백업 · 복원 (다른 서버로 옮길 때, 정기 백업) ---------- */
 // 올린 영상·파일은 백업에 들어가지 않음 (데이터베이스만)
-const BACKUP_TABLES = ["users", "codes", "crews", "members", "channels", "videos", "soop_channels", "broadcasts", "sigs", "lessons", "files", "requests"];
+const BACKUP_TABLES = ["users", "codes", "crews", "members", "channels", "videos", "soop_channels", "broadcasts", "sigs", "lessons", "files", "requests", "excel_rounds", "settle_entries"];
 
 route("GET", "/api/admin/backup", (req, _p, _u, res) => {
   requireAdmin(req);

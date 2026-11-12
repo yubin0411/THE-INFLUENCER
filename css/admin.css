@@ -230,3 +230,29 @@ a.lesson-title:hover { text-decoration: underline; }
 .asset audio { height: 32px; max-width: 220px; }
 .asset-tools { display: flex; gap: 6px; margin-left: auto; }
 @media (max-width: 760px) { .asset-row { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------- 회원: 가입 정보 · 연결 멤버 ---------- */
+.user-info { font-size: 12.5px; line-height: 1.5; min-width: 150px; }
+.member-link { min-width: 130px; }
+
+/* ---------- 정산 ---------- */
+.st-target { margin-bottom: 12px; }
+.st-round-form { margin-top: 4px; }
+.st-round-form[hidden] { display: none; }
+.st-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0 12px; }
+.st-toolbar .grow { flex: 1; font-size: 13.5px; }
+.st-toolbar input[type="search"] { max-width: 220px; }
+.st-table td, .st-table th { white-space: nowrap; }
+.st-table .cell-input.money { width: 120px; text-align: right; font-variant-numeric: tabular-nums; }
+.st-table td[data-out] { font-variant-numeric: tabular-nums; color: var(--muted); }
+.st-table td[data-out="member"] b { color: var(--text); }
+.st-table tr.is-paid { opacity: .7; }
+.st-table tr[hidden], .st-terms tr[hidden] { display: none; }
+.st-items { font-size: 12.5px; color: var(--muted); white-space: normal !important; }
+.st-terms .cell-input.small { width: 76px; text-align: right; }
+.nowrap { white-space: nowrap; }
+.st-terms td:first-child { min-width: 96px; white-space: nowrap; }
+.st-terms td:last-child { white-space: nowrap; }
+.st-terms th { white-space: normal; font-size: 12px; line-height: 1.35; min-width: 64px; }
+.st-terms select.cell-input { min-width: 150px; }
+.st-terms .cell-input.small { width: 64px; }

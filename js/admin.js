@@ -54,8 +54,13 @@
   };
 
   /* ---------- 회원 ---------- */
+  const fmtPhone = (p = "") => p.replace(/^(\d{3})(\d{3,4})(\d{4})$/, "$1-$2-$3");
   async function loadUsers() {
-    const users = await api("api/admin/users");
+    const [users, st] = await Promise.all([api("api/admin/users"), api("api/admin/settle")]);
+    const memberOpts = (cur) => `<option value="">연결 안 함</option>` + st.members.map((m) => {
+      const taken = users.find((u) => u.member_id === m.id && u.member_id !== cur);
+      return `<option value="${m.id}" ${m.id === cur ? "selected" : ""} ${taken ? "disabled" : ""}>${esc(m.name)}${taken ? ` (${esc(taken.username)})` : ""}</option>`;
+    }).join("");
     const pending = users.filter((u) => u.status === "pending").length;
     $("#pending-count").textContent = pending;
     $("#pending-count").hidden = !pending;
@@ -66,6 +71,12 @@
         <tr>
           <td><strong>${esc(u.username)}</strong>${u.role === "admin" ? ' <span class="tag">관리자</span>' : ""}</td>
           <td>${esc(u.nickname)}</td>
+          <td class="user-info">${u.real_name || u.phone || u.account
+            ? `<b>${esc(u.real_name)}</b>${u.alias ? ` <span class="muted">가명 ${esc(u.alias)}</span>` : ""}<br>
+               <span class="muted">${esc(fmtPhone(u.phone))}</span><br>
+               <span class="muted">${esc(u.bank)} ${esc(u.account)}</span>`
+            : '<span class="muted">-</span>'}</td>
+          <td data-user="${u.id}"><select class="cell-input member-link" aria-label="연결 멤버">${memberOpts(u.member_id)}</select></td>
           <td><code>${esc(u.code || "-")}</code></td>
           <td>${fmtDate(u.created_at)}</td>
           <td><span class="status status-${u.status}">${STATUS[u.status]}</span></td>
@@ -76,7 +87,7 @@
             <button type="button" class="mini-action danger" data-delete>삭제</button>
           </td>
         </tr>`).join("")
-      : `<tr><td colspan="6"><div class="empty">${userFilter === "pending" ? "승인 대기 중인 회원이 없습니다." : "회원이 없습니다."}</div></td></tr>`;
+      : `<tr><td colspan="8"><div class="empty">${userFilter === "pending" ? "승인 대기 중인 회원이 없습니다." : "회원이 없습니다."}</div></td></tr>`;
   }
 
   $("#user-filter").addEventListener("click", (e) => {
@@ -96,6 +107,15 @@
     setTimeout(() => { delete btn.dataset.armed; btn.textContent = label; }, 3000);
     return false;
   };
+
+  // 회원 ↔ 멤버 연결: 연결하면 그 회원이 사이트에서 자기 멤버 프로필 · 정산을 봄
+  $("#user-list").addEventListener("change", async (e) => {
+    const sel = e.target.closest(".member-link");
+    if (!sel) return;
+    sel.disabled = true;
+    try { await api(`api/admin/users/${sel.closest("[data-user]").dataset.user}`, { member_id: sel.value ? Number(sel.value) : null }); await loadUsers(); }
+    catch (err) { alertNote(err.message); await loadUsers(); }
+  });
 
   $("#user-list").addEventListener("click", (e) => {
     const btn = e.target.closest("button");
@@ -1012,13 +1032,13 @@
         const d = r.data;
         const body = r.type === "backwall"
           ? `<p><b>멤버</b> ${esc(d.member || "-")}</p><p class="pre">${esc(d.content)}</p>`
-          : `<p><b>곡</b> ${esc(d.song)}${d.artist ? ` — ${esc(d.artist)}` : ""}</p>
+          : `<p><b>시그</b> ${esc(d.song)}${d.artist ? ` — ${esc(d.artist)}` : ""}</p>
              ${d.url ? `<p><a href="${esc(d.url)}" target="_blank" rel="noopener noreferrer">${esc(d.url)}</a></p>` : ""}
              ${d.memo ? `<p class="pre">${esc(d.memo)}</p>` : ""}`;
         return `
           <article class="request-card ${r.is_read ? "is-read" : ""}" data-request="${r.id}">
             <header>
-              <span class="tag">${r.type === "backwall" ? "백월 요청" : "추천 노래"}</span>
+              <span class="tag">${r.type === "backwall" ? "백월 요청" : "시그 요청"}</span>
               <strong>${esc(r.nickname || "탈퇴 회원")}</strong><span class="muted">${esc(r.username || "")}</span>
               <span class="muted right">${fmtAgo(r.created_at)}</span>
             </header>
@@ -1051,6 +1071,406 @@
     const body = btn.hasAttribute("data-delete") ? { action: "delete" } : { read: btn.dataset.read === "1" };
     act(btn, async () => { await api(`api/admin/requests/${id}`, body); await loadRequests(); });
   });
+
+  /* ---------- 정산 ---------- */
+  // 금액 단위: 원. 계산은 서버와 같은 방식 (수수료 → 세금 → 회사와 나누기, 또는 나눈 뒤 세금)
+  const ST_SRC = [["soop", "SOOP"], ["yt_account", "유튜브 계좌후원"], ["yt_web", "유튜브 웹후원"]];
+  const TERM_FIELDS = [
+    ["fee_soop", "SOOP 수수료 %"], ["fee_yt_account", "유튜브 계좌후원 수수료 %"], ["fee_yt_web", "유튜브 웹후원 수수료 %"],
+    ["tax", "세금 %"], ["share_excel", "엑셀 멤버 몫 %"], ["share_personal", "개인방송 멤버 몫 %"],
+  ];
+  const ST_HINT = {
+    excel: "엑셀 방송은 시즌 · 회차마다 멤버별 후원금을 넣습니다. 회차 날짜의 달로 월별 정산에 들어가요. 멤버가 많으면 [양식 받기] → 금액 채우기 → [시트 업로드] 하면 한 번에 들어갑니다.",
+    personal: "개인 방송은 달마다 멤버별 후원금을 넣습니다. 금액을 모두 0으로 두면 그 칸은 지워집니다.",
+    month: "그 달의 엑셀 + 개인방송을 멤버별로 합친 금액입니다. 돈을 보낸 뒤 [지급 완료]를 누르면 그때의 계약 조건으로 금액이 고정되고, 멤버 화면에 지급 완료로 보입니다.",
+    terms: "계약 조건은 멤버마다 다르게 정할 수 있습니다. 따로 정하지 않은 멤버는 기본 조건을 씁니다. 바꾼 조건은 아직 지급 완료하지 않은 정산에 바로 적용됩니다.",
+  };
+  const wonFmt = (n) => Number(n || 0).toLocaleString();
+  const thisMonth = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 7);
+  const today = () => new Date(Date.now() + 9 * 3600e3).toISOString().slice(0, 10);
+  const toNum = (v) => Math.max(0, Math.round(Number(String(v ?? "").replace(/[^\d.-]/g, "")) || 0));
+
+  function calcSettle(e, t) {
+    const by = {};
+    let gross = 0, fee = 0;
+    for (const [s] of ST_SRC) {
+      const g = Number(e[s]) || 0, f = Math.round((g * t[`fee_${s}`]) / 100);
+      by[s] = { gross: g, fee: f, net: g - f };
+      gross += g; fee += f;
+    }
+    const afterFee = gross - fee, share = e.kind === "excel" ? t.share_excel : t.share_personal;
+    let tax, member, company;
+    if (t.tax_mode === "after") {
+      const mg = Math.round((afterFee * share) / 100);
+      company = afterFee - mg; tax = Math.round((mg * t.tax) / 100); member = mg - tax;
+    } else {
+      tax = Math.round((afterFee * t.tax) / 100);
+      const net = afterFee - tax;
+      member = Math.round((net * share) / 100); company = net - member;
+    }
+    return { by, gross, fee, after_fee: afterFee, tax, company, member };
+  }
+
+  let st = { mode: "excel", round: null, month: thisMonth(), sumMonth: thisMonth(), data: null };
+  const stNote = (msg) => ($("#st-note").textContent = msg || "");
+
+  async function loadSettle() {
+    st.data = await api("api/admin/settle");
+    if (!st.data.rounds.some((r) => r.id === st.round)) st.round = st.data.rounds[0]?.id ?? null;
+    renderSettle();
+  }
+
+  $("#st-mode").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-mode]");
+    if (!b) return;
+    st.mode = b.dataset.mode;
+    $$("#st-mode .chip").forEach((c) => c.classList.toggle("is-active", c === b));
+    stNote("");
+    renderSettle();
+  });
+  $('.admin-tabs [data-panel="settle"]').addEventListener("click", () => loadSettle().catch((err) => stNote(err.message)));
+
+  function renderSettle() {
+    $("#st-hint").textContent = ST_HINT[st.mode];
+    const body = $("#st-body");
+    if (!st.data) { body.innerHTML = '<div class="empty">불러오는 중…</div>'; return; }
+    if (st.mode === "terms") return renderTerms(body);
+    if (st.mode === "month") return renderMonthSum(body);
+    return renderEntries(body);
+  }
+
+  /* 엑셀 회차 · 개인방송 달 금액 입력 */
+  const roundLabel = (r) => `${r.season}시즌 ${r.round}회차${r.title ? ` · ${r.title}` : ""} (${r.held_on})`;
+
+  async function renderEntries(body) {
+    const excel = st.mode === "excel";
+    const rounds = st.data.rounds;
+    const cur = rounds.find((r) => r.id === st.round);
+    const next = rounds[0] ? { season: rounds[0].season, round: rounds[0].round + 1 } : { season: 1, round: 1 };
+    body.innerHTML = `
+      ${excel ? `
+        <div class="inline-form st-target">
+          <label class="field grow">회차<select id="st-round">${rounds.length ? rounds.map((r) => `<option value="${r.id}" ${r.id === st.round ? "selected" : ""}>${esc(roundLabel(r))}</option>`).join("") : '<option value="">먼저 회차를 만드세요</option>'}</select></label>
+          <button type="button" class="ghost-btn" id="st-round-new">+ 회차 추가</button>
+          ${cur ? '<button type="button" class="ghost-btn" id="st-round-edit">회차 수정</button><button type="button" class="mini-action danger" id="st-round-del">회차 삭제</button>' : ""}
+        </div>
+        <form class="inline-form box st-round-form" id="st-round-form" hidden>
+          <input type="hidden" name="id">
+          <label class="field">시즌<input name="season" type="number" min="1" required value="${next.season}"></label>
+          <label class="field">회차<input name="round" type="number" min="1" required value="${next.round}"></label>
+          <label class="field">방송 날짜<input name="held_on" type="date" required value="${today()}"></label>
+          <label class="field grow">이름 (선택)<input name="title" maxlength="60" placeholder="예: 할로윈 특집"></label>
+          <button type="submit" class="primary-btn">저장</button>
+          <button type="button" class="ghost-btn" id="st-round-cancel">취소</button>
+        </form>`
+      : `<div class="inline-form st-target"><label class="field">달<input type="month" id="st-month" value="${st.month}"></label></div>`}
+      ${excel && !cur ? '<div class="empty">회차를 추가하면 멤버별 금액을 넣을 수 있어요.</div>' : `
+        <div class="st-toolbar">
+          <input type="search" class="cell-input" id="st-search" placeholder="멤버 찾기">
+          <span class="grow"></span>
+          <button type="button" class="ghost-btn" id="st-template">양식 받기 (.xlsx)</button>
+          <label class="ghost-btn file-btn">시트 업로드<input type="file" id="st-upload" accept=".xlsx,.xls,.csv" hidden></label>
+          <button type="button" class="primary-btn" id="st-save">저장</button>
+        </div>
+        <div class="table-wrap">
+          <table class="sig-table admin-table st-table">
+            <thead><tr><th>멤버</th>${ST_SRC.map(([, n]) => `<th class="num">${n}</th>`).join("")}<th>메모</th><th class="num">후원 합계</th><th class="num">수수료 · 세금</th><th class="num">회사</th><th class="num">멤버 정산</th></tr></thead>
+            <tbody id="st-rows"><tr><td colspan="9"><div class="empty">불러오는 중…</div></td></tr></tbody>
+          </table>
+        </div>`}`;
+
+    if (excel) bindRoundForm(cur);
+    else $("#st-month").addEventListener("change", (e) => { st.month = e.target.value || thisMonth(); renderSettle(); });
+    if (excel && !cur) return;
+
+    const q = excel ? `kind=excel&round=${cur.id}` : `kind=personal&month=${st.month}`;
+    let entries;
+    try { entries = await api(`api/admin/settle/entries?${q}`); } catch (err) { stNote(err.message); return; }
+    const byMember = new Map(entries.map((e) => [e.member_id, e]));
+    const kind = excel ? "excel" : "personal";
+    $("#st-rows").innerHTML = st.data.members.map((m) => {
+      const e = byMember.get(m.id) || {};
+      const paid = !!e.paid_at;
+      return `<tr data-member="${m.id}" data-name="${esc(m.name.toLowerCase())}" class="${paid ? "is-paid" : ""}">
+        <td><strong>${esc(m.name)}</strong>${m.user ? "" : ' <span class="muted">(회원 연결 안 됨)</span>'}${paid ? ` <span class="status status-approved">지급 완료</span>` : ""}</td>
+        ${ST_SRC.map(([k]) => `<td class="num"><input class="cell-input money" inputmode="numeric" data-k="${k}" value="${e[k] ? wonFmt(e[k]) : ""}" placeholder="0" ${paid ? "disabled" : ""}></td>`).join("")}
+        <td><input class="cell-input" data-k="memo" maxlength="200" value="${esc(e.memo || "")}" ${paid ? "disabled" : ""}></td>
+        <td class="num" data-out="gross"></td><td class="num" data-out="cut"></td><td class="num" data-out="company"></td><td class="num" data-out="member"></td>
+      </tr>`;
+    }).join("") || '<tr><td colspan="9"><div class="empty">등록된 멤버가 없습니다.</div></td></tr>';
+
+    const termsOf = (id) => byMember.get(id)?.terms || st.data.members.find((m) => m.id === id).terms;
+    const recalc = (tr) => {
+      const v = Object.fromEntries(ST_SRC.map(([k]) => [k, toNum($(`[data-k="${k}"]`, tr).value)]));
+      const c = calcSettle({ ...v, kind }, termsOf(Number(tr.dataset.member)));
+      $('[data-out="gross"]', tr).textContent = c.gross ? wonFmt(c.gross) : "";
+      $('[data-out="cut"]', tr).textContent = c.gross ? wonFmt(c.fee + c.tax) : "";
+      $('[data-out="company"]', tr).textContent = c.gross ? wonFmt(c.company) : "";
+      $('[data-out="member"]', tr).innerHTML = c.gross ? `<b>${wonFmt(c.member)}</b>` : "";
+    };
+    $$("#st-rows tr[data-member]").forEach(recalc);
+    $("#st-rows").addEventListener("input", (e) => {
+      const tr = e.target.closest("tr[data-member]");
+      if (tr) recalc(tr);
+    });
+    // 입력칸을 벗어나면 천 단위 쉼표
+    $("#st-rows").addEventListener("focusout", (e) => {
+      if (e.target.classList.contains("money")) e.target.value = toNum(e.target.value) ? wonFmt(toNum(e.target.value)) : "";
+    });
+    $("#st-search").addEventListener("input", (e) => {
+      const s = e.target.value.trim().toLowerCase();
+      $$("#st-rows tr[data-member]").forEach((tr) => (tr.hidden = !!s && !tr.dataset.name.includes(s)));
+    });
+
+    const target = excel ? { kind, round: cur.id } : { kind, month: st.month };
+    const targetName = excel ? `엑셀_${cur.season}시즌_${cur.round}회차` : `개인방송_${st.month}`;
+    const collect = () => $$("#st-rows tr[data-member]").filter((tr) => !tr.classList.contains("is-paid")).map((tr) => ({
+      member_id: Number(tr.dataset.member),
+      ...Object.fromEntries(ST_SRC.map(([k]) => [k, toNum($(`[data-k="${k}"]`, tr).value)])),
+      memo: $('[data-k="memo"]', tr).value,
+    }));
+    const save = async (rows) => {
+      const r = await api("api/admin/settle/entries", { ...target, rows });
+      stNote(`저장했습니다. ${r.saved}명 반영${r.removed ? ` · ${r.removed}명 비움` : ""}${r.skipped_paid ? ` · 지급 완료라 건너뜀 ${r.skipped_paid}명` : ""}`);
+    };
+    $("#st-save").addEventListener("click", (e) => act(e.currentTarget, async () => { await save(collect()); renderSettle(); }));
+
+    // 양식: 멤버ID · 멤버 · SOOP · 유튜브 계좌후원 · 유튜브 웹후원 · 메모 (지금 넣어 둔 금액도 같이)
+    $("#st-template").addEventListener("click", () => {
+      if (!window.XLSX) return stNote("엑셀 도구를 불러오지 못했습니다. 새로고침 후 다시 시도하세요.");
+      const rows = [["멤버ID", "멤버", ...ST_SRC.map(([, n]) => n), "메모"]];
+      for (const m of st.data.members) {
+        const e = byMember.get(m.id) || {};
+        rows.push([m.id, m.name, e.soop || 0, e.yt_account || 0, e.yt_web || 0, e.memo || ""]);
+      }
+      const ws = XLSX.utils.aoa_to_sheet(rows);
+      ws["!cols"] = [{ wch: 8 }, { wch: 16 }, { wch: 14 }, { wch: 16 }, { wch: 16 }, { wch: 24 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "정산");
+      XLSX.writeFile(wb, `정산_${targetName}.xlsx`);
+    });
+
+    $("#st-upload").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      try {
+        const { rows, unknown } = await readSettleSheet(file);
+        if (!rows.length) throw new Error("시트에서 멤버를 찾지 못했습니다. [양식 받기]로 받은 파일 형식을 써 주세요.");
+        // 지급 완료된 멤버는 서버에서 건너뜀
+        const r = await api("api/admin/settle/entries", { ...target, rows });
+        renderSettle();
+        stNote(`시트 반영: ${r.saved}명 저장${r.removed ? ` · ${r.removed}명 비움` : ""}${r.skipped_paid ? ` · 지급 완료라 건너뜀 ${r.skipped_paid}명` : ""}${unknown.length ? ` · 못 찾은 멤버: ${unknown.slice(0, 10).join(", ")}${unknown.length > 10 ? ` 외 ${unknown.length - 10}명` : ""}` : ""}`);
+      } catch (err) { stNote(err.message); }
+    });
+  }
+
+  // 시트 읽기: 첫 줄에서 칸 이름을 찾아 맞춤. 멤버ID 가 있으면 ID로, 없으면 이름으로 멤버를 찾음
+  async function readSettleSheet(file) {
+    if (!window.XLSX) throw new Error("엑셀 도구를 불러오지 못했습니다. 새로고침 후 다시 시도하세요.");
+    const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+    const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+    const hi = aoa.findIndex((r) => r.some((c) => /멤버|이름/.test(String(c))));
+    if (hi < 0) throw new Error("첫 줄에 '멤버' 칸이 있어야 합니다.");
+    const head = aoa[hi].map((c) => String(c).replace(/\s/g, "").toLowerCase());
+    const col = (re) => head.findIndex((h) => re.test(h));
+    const c = {
+      id: col(/^멤버id$|^id$/), name: col(/^멤버$|^이름$|멤버이름/),
+      soop: col(/soop|숲|별풍선/), yt_account: col(/계좌/), yt_web: col(/웹/), memo: col(/메모/),
+    };
+    const byName = new Map(st.data.members.map((m) => [m.name.replace(/\s/g, "").toLowerCase(), m]));
+    const rows = [], unknown = [];
+    for (const r of aoa.slice(hi + 1)) {
+      const name = c.name >= 0 ? String(r[c.name]).trim() : "";
+      const id = c.id >= 0 ? Number(r[c.id]) : NaN;
+      if (!name && !id) continue;
+      const m = st.data.members.find((x) => x.id === id) || byName.get(name.replace(/\s/g, "").toLowerCase());
+      if (!m) { unknown.push(name || `ID ${r[c.id]}`); continue; }
+      rows.push({
+        member_id: m.id,
+        soop: c.soop >= 0 ? toNum(r[c.soop]) : 0, yt_account: c.yt_account >= 0 ? toNum(r[c.yt_account]) : 0,
+        yt_web: c.yt_web >= 0 ? toNum(r[c.yt_web]) : 0, memo: c.memo >= 0 ? String(r[c.memo]).trim() : "",
+      });
+    }
+    return { rows, unknown };
+  }
+
+  function bindRoundForm(cur) {
+    const form = $("#st-round-form");
+    $("#st-round").addEventListener("change", (e) => { st.round = Number(e.target.value) || null; renderSettle(); });
+    $("#st-round-new").addEventListener("click", () => { form.reset(); form.elements.id.value = ""; form.hidden = false; });
+    $("#st-round-cancel").addEventListener("click", () => (form.hidden = true));
+    if (cur) {
+      $("#st-round-edit").addEventListener("click", () => {
+        Object.assign(form.elements.id, { value: cur.id });
+        form.elements.season.value = cur.season; form.elements.round.value = cur.round;
+        form.elements.held_on.value = cur.held_on; form.elements.title.value = cur.title;
+        form.hidden = false;
+      });
+      $("#st-round-del").addEventListener("click", (e) => {
+        if (!confirmClick(e.currentTarget)) return;
+        act(e.currentTarget, async () => { await api("api/admin/settle/rounds", { action: "delete", id: cur.id }); st.round = null; await loadSettle(); stNote("회차를 지웠습니다."); });
+      });
+    }
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        const r = await api("api/admin/settle/rounds", Object.fromEntries(new FormData(form)));
+        st.round = r.id;
+        await loadSettle();
+        stNote("회차를 저장했습니다.");
+      } catch (err) { stNote(err.message); }
+    });
+  }
+
+  /* 월별 합계 · 지급 */
+  async function renderMonthSum(body) {
+    body.innerHTML = `
+      <div class="inline-form st-target">
+        <label class="field">달<input type="month" id="st-sum-month" value="${st.sumMonth}"></label>
+      </div>
+      <div class="st-toolbar">
+        <span class="grow" id="st-sum-total"></span>
+        <button type="button" class="ghost-btn" id="st-sum-xlsx">지급 목록 받기 (.xlsx)</button>
+        <button type="button" class="primary-btn" id="st-sum-payall">남은 멤버 모두 지급 완료</button>
+      </div>
+      <div class="table-wrap">
+        <table class="sig-table admin-table st-table">
+          <thead><tr><th>멤버</th><th>정산 내역</th><th class="num">후원 합계</th><th class="num">수수료</th><th class="num">세금</th><th class="num">회사</th><th class="num">멤버 정산</th><th>받는 계좌</th><th>상태</th></tr></thead>
+          <tbody id="st-sum-rows"><tr><td colspan="9"><div class="empty">불러오는 중…</div></td></tr></tbody>
+        </table>
+      </div>`;
+    $("#st-sum-month").addEventListener("change", (e) => { st.sumMonth = e.target.value || thisMonth(); renderSettle(); });
+    let entries;
+    try { entries = await api(`api/admin/settle/entries?kind=month&month=${st.sumMonth}`); } catch (err) { stNote(err.message); return; }
+    const groups = new Map();
+    for (const e of entries) {
+      if (!groups.has(e.member_id)) groups.set(e.member_id, { list: [], gross: 0, fee: 0, tax: 0, company: 0, member: 0 });
+      const g = groups.get(e.member_id);
+      g.list.push(e);
+      for (const k of ["gross", "fee", "tax", "company", "member"]) g[k] += e.calc[k];
+    }
+    const rows = st.data.members.filter((m) => groups.has(m.id)).map((m) => {
+      const g = groups.get(m.id);
+      return { m, g, paid: g.list.every((e) => e.paid_at), paidAt: Math.max(...g.list.map((e) => e.paid_at || 0)) };
+    });
+    const sum = (k) => rows.reduce((a, r) => a + r.g[k], 0);
+    $("#st-sum-total").innerHTML = rows.length ? `${rows.length}명 · 후원 ${wonFmt(sum("gross"))}원 · 멤버 정산 <b>${wonFmt(sum("member"))}원</b> · 회사 ${wonFmt(sum("company"))}원` : "";
+    $("#st-sum-rows").innerHTML = rows.length ? rows.map(({ m, g, paid, paidAt }) => `
+      <tr data-member="${m.id}">
+        <td><strong>${esc(m.name)}</strong></td>
+        <td class="st-items">${g.list.map((e) => e.kind === "excel" ? `엑셀 ${e.season}-${e.round}회` : "개인방송").join(" · ")}</td>
+        <td class="num">${wonFmt(g.gross)}</td><td class="num">${wonFmt(g.fee)}</td><td class="num">${wonFmt(g.tax)}</td>
+        <td class="num">${wonFmt(g.company)}</td><td class="num"><b>${wonFmt(g.member)}</b></td>
+        <td>${m.user ? `${esc(m.user.real_name)} <span class="muted">${esc(m.user.bank)} ${esc(m.user.account)}</span>` : '<span class="muted">회원 연결 안 됨</span>'}</td>
+        <td class="nowrap">${paid
+          ? `<span class="status status-approved">지급 완료 ${fmtDate(paidAt)}</span> <button type="button" class="mini-action" data-unpay>취소</button>`
+          : `<button type="button" class="mini-action ok" data-pay>지급 완료</button>`}</td>
+      </tr>`).join("") : '<tr><td colspan="9"><div class="empty">이 달에 넣은 정산 금액이 없습니다.</div></td></tr>';
+
+    const setPaid = async (ids, paid) => {
+      await api("api/admin/settle/paid", { month: st.sumMonth, member_ids: ids, paid });
+      renderSettle();
+    };
+    $("#st-sum-rows").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-pay], [data-unpay]");
+      if (b) act(b, () => setPaid([Number(b.closest("tr").dataset.member)], b.hasAttribute("data-pay")));
+    });
+    $("#st-sum-payall").addEventListener("click", (e) => {
+      const ids = rows.filter((r) => !r.paid).map((r) => r.m.id);
+      if (!ids.length) return stNote("남은 멤버가 없습니다.");
+      if (!confirmClick(e.currentTarget)) return;
+      act(e.currentTarget, () => setPaid(ids, true));
+    });
+    $("#st-sum-xlsx").addEventListener("click", () => {
+      if (!window.XLSX) return stNote("엑셀 도구를 불러오지 못했습니다.");
+      const aoa = [["멤버", "본명", "은행", "계좌번호", "후원 합계", "수수료", "세금", "회사", "멤버 정산", "상태"]];
+      for (const { m, g, paid } of rows) aoa.push([m.name, m.user?.real_name || "", m.user?.bank || "", m.user?.account || "", g.gross, g.fee, g.tax, g.company, g.member, paid ? "지급 완료" : "지급 예정"]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), st.sumMonth);
+      XLSX.writeFile(wb, `정산_지급목록_${st.sumMonth}.xlsx`);
+    });
+  }
+
+  /* 계약 조건 */
+  const termInputs = (t, attrs = "") => TERM_FIELDS.map(([k]) => `<td><input class="cell-input small" inputmode="decimal" data-t="${k}" value="${t[k]}" ${attrs}></td>`).join("")
+    + `<td><select class="cell-input" data-t="tax_mode" ${attrs}><option value="before" ${t.tax_mode !== "after" ? "selected" : ""}>나누기 전</option><option value="after" ${t.tax_mode === "after" ? "selected" : ""}>나눈 뒤 멤버 몫에서</option></select></td>`;
+  const readTerms = (tr) => Object.fromEntries($$("[data-t]", tr).map((i) => [i.dataset.t, i.value]));
+
+  function renderTerms(body) {
+    const d = st.data.default_terms;
+    const head = `<tr><th>멤버</th>${TERM_FIELDS.map(([, n]) => `<th>${n}</th>`).join("")}<th>세금 떼는 시점</th><th class="right">관리</th></tr>`;
+    body.innerHTML = `
+      <div class="box">
+        <h3>기본 조건</h3>
+        <p class="hint">조건을 따로 정하지 않은 멤버에게 적용됩니다. 멤버 몫 %는 회사와 나눌 때 멤버가 받는 비율입니다 (예: 60 → 멤버 60 : 회사 40).<br>
+          계산 순서: 후원금 − 플랫폼 수수료 → 세금 → 회사와 나누기. "나눈 뒤 멤버 몫에서"를 고르면 회사와 먼저 나누고 멤버 몫에서만 세금을 뗍니다.</p>
+        <div class="table-wrap"><table class="sig-table admin-table st-terms"><thead>${head}</thead>
+          <tbody><tr id="st-default"><td><strong>기본</strong></td>${termInputs(d)}<td class="right"><button type="button" class="mini-action ok" id="st-default-save">저장</button></td></tr></tbody></table></div>
+      </div>
+      <div class="st-toolbar">
+        <input type="search" class="cell-input" id="st-terms-search" placeholder="멤버 찾기">
+        <span class="grow"></span>
+        <button type="button" class="ghost-btn" id="st-terms-template">조건 양식 받기 (.xlsx)</button>
+        <label class="ghost-btn file-btn">조건 시트 업로드<input type="file" id="st-terms-upload" accept=".xlsx,.xls,.csv" hidden></label>
+      </div>
+      <div class="table-wrap"><table class="sig-table admin-table st-terms"><thead>${head}</thead>
+        <tbody id="st-terms-rows">${st.data.members.map((m) => `
+          <tr data-member="${m.id}" data-name="${esc(m.name.toLowerCase())}">
+            <td><strong>${esc(m.name)}</strong><br><span class="muted">${m.custom ? "개별 조건" : "기본 조건 사용 중"}</span></td>
+            ${termInputs(m.terms)}
+            <td class="right nowrap"><button type="button" class="mini-action ok" data-save>저장</button>${m.custom ? ' <button type="button" class="mini-action" data-reset>기본으로</button>' : ""}</td>
+          </tr>`).join("")}</tbody></table></div>`;
+
+    $("#st-default-save").addEventListener("click", (e) => act(e.currentTarget, async () => {
+      await api("api/admin/settle/terms", { terms: readTerms($("#st-default")) });
+      await loadSettle(); stNote("기본 조건을 저장했습니다.");
+    }));
+    $("#st-terms-rows").addEventListener("click", (e) => {
+      const b = e.target.closest("[data-save], [data-reset]");
+      if (!b) return;
+      const tr = b.closest("tr");
+      act(b, async () => {
+        await api("api/admin/settle/terms", { member_id: Number(tr.dataset.member), terms: readTerms(tr), reset: b.hasAttribute("data-reset") });
+        await loadSettle(); stNote(b.hasAttribute("data-reset") ? "기본 조건으로 되돌렸습니다." : "조건을 저장했습니다.");
+      });
+    });
+    $("#st-terms-search").addEventListener("input", (e) => {
+      const s = e.target.value.trim().toLowerCase();
+      $$("#st-terms-rows tr").forEach((tr) => (tr.hidden = !!s && !tr.dataset.name.includes(s)));
+    });
+    $("#st-terms-template").addEventListener("click", () => {
+      if (!window.XLSX) return stNote("엑셀 도구를 불러오지 못했습니다.");
+      const aoa = [["멤버ID", "멤버", ...TERM_FIELDS.map(([, n]) => n), "세금 시점 (나누기 전 / 나눈 뒤)"]];
+      for (const m of st.data.members) aoa.push([m.id, m.name, ...TERM_FIELDS.map(([k]) => m.terms[k]), m.terms.tax_mode === "after" ? "나눈 뒤" : "나누기 전"]);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), "계약 조건");
+      XLSX.writeFile(wb, "정산_계약조건.xlsx");
+    });
+    $("#st-terms-upload").addEventListener("change", async (e) => {
+      const file = e.target.files[0];
+      e.target.value = "";
+      if (!file) return;
+      try {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const aoa = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" });
+        const head = (aoa[0] || []).map((c) => String(c).replace(/\s/g, ""));
+        const idx = (label) => head.indexOf(label.replace(/\s/g, ""));
+        const iId = idx("멤버ID"), iName = idx("멤버"), iMode = head.findIndex((h) => h.startsWith("세금시점"));
+        const rows = [], unknown = [];
+        for (const r of aoa.slice(1)) {
+          const m = st.data.members.find((x) => x.id === Number(r[iId])) || st.data.members.find((x) => x.name === String(r[iName]).trim());
+          if (!m) { if (String(r[iName]).trim()) unknown.push(String(r[iName]).trim()); continue; }
+          const terms = Object.fromEntries(TERM_FIELDS.map(([k, n]) => [k, idx(n) >= 0 ? r[idx(n)] : m.terms[k]]));
+          terms.tax_mode = iMode >= 0 && /뒤|after/i.test(String(r[iMode])) ? "after" : "before";
+          rows.push({ member_id: m.id, terms });
+        }
+        const res = await api("api/admin/settle/terms/bulk", { rows });
+        await loadSettle();
+        stNote(`조건 반영: ${res.saved}명${unknown.length ? ` · 못 찾은 멤버: ${unknown.slice(0, 10).join(", ")}` : ""}`);
+      } catch (err) { stNote(err.message); }
+    });
+  }
 
   /* ---------- 내 계정 ---------- */
   $("#password-form").addEventListener("submit", async (e) => {

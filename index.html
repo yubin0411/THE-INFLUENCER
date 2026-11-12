@@ -146,6 +146,9 @@
       </section>
     </div>
 
+    <!-- 내 멤버 프로필 편집 (#me/profile) · 내 정산 (#me/settle) — 연결된 멤버 본인만 -->
+    <div class="view me-view" id="me-view" hidden></div>
+
     <!-- 라이브 시간 랭킹 (#ranking) · 멤버 자세히 (#ranking/{멤버}) -->
     <div class="view rank-view" id="rank-view" hidden></div>
 
@@ -183,7 +186,17 @@
       <label class="field">아이디<input name="username" autocomplete="username" required></label>
       <label class="field">비밀번호<input name="password" type="password" autocomplete="current-password" required></label>
       <label class="field signup-only" hidden>비밀번호 확인<input name="password2" type="password" autocomplete="new-password"></label>
-      <label class="field signup-only" hidden>닉네임<input name="nickname"></label>
+      <label class="field signup-only" hidden>이름 (활동명)<input name="nickname" maxlength="30" placeholder="사이트에 보일 이름"></label>
+      <div class="field-row signup-only" hidden>
+        <label class="field">본명<input name="real_name" maxlength="30" autocomplete="name"></label>
+        <label class="field">가명<input name="alias" maxlength="30"></label>
+      </div>
+      <label class="field signup-only" hidden>전화번호<input name="phone" type="tel" inputmode="numeric" maxlength="13" placeholder="010-1234-5678" autocomplete="tel"></label>
+      <div class="field-row signup-only" hidden>
+        <label class="field">은행<input name="bank" maxlength="20" placeholder="예: 국민은행"></label>
+        <label class="field">계좌번호<input name="account" inputmode="numeric" maxlength="30" placeholder="숫자와 - 만"></label>
+      </div>
+      <p class="hint signup-only" hidden>본명 · 전화번호 · 계좌는 정산용으로 관리자만 볼 수 있어요.</p>
       <label class="field signup-only" hidden>승인코드<input name="code" placeholder="관리자에게 받은 코드"></label>
       <p class="hint signup-only" hidden>가입 신청 후 관리자가 승인하면 로그인할 수 있습니다.</p>
       <button class="primary-btn wide" type="submit">확인</button>
@@ -191,14 +204,14 @@
     </form>
   </dialog>
 
-  <!-- 추천 노래 -->
+  <!-- 시그 요청 -->
   <dialog class="modal" id="modal-recommend" aria-labelledby="recommend-title">
     <form class="modal-body" data-request="recommend">
       <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
-      <h2 id="recommend-title">추천 노래 요청</h2>
-      <label class="field">곡 제목<input name="song" required></label>
+      <h2 id="recommend-title">시그 요청</h2>
+      <label class="field">시그 이름 (곡 제목)<input name="song" required></label>
       <label class="field">아티스트<input name="artist"></label>
-      <label class="field">링크<input name="url" type="url" placeholder="https://"></label>
+      <label class="field">레퍼런스 링크<input name="url" type="url" placeholder="https://"></label>
       <label class="field">메모<textarea name="memo" rows="3"></textarea></label>
       <button class="primary-btn wide" type="submit">요청 보내기</button>
       <p class="form-note" aria-live="polite"></p>

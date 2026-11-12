@@ -41,6 +41,8 @@
 
   // #crew/{크루}/{메뉴}/{채널} — 채널은 게시글·쇼츠에서 계정별로 볼 때만 붙음
   function parseRoute() {
+    const me = location.hash.match(/^#me\/(profile|settle)$/);
+    if (me) return { crew: null, page: "me", channel: null, sub: me[1] };
     // #ranking, #ranking?sort=peak, #ranking/{멤버}
     const dn = location.hash.match(/^#donors(?:\/([^/?]+))?(?:\?(.*))?$/);
     if (dn) return { crew: null, page: "donors", channel: null, donor: dn[1] ? decodeURIComponent(dn[1]) : null, params: new URLSearchParams(dn[2] || "") };
@@ -61,13 +63,16 @@
     renderNav();
     closeDropdowns();
     closeMobileNav();
-    const home = current.page === "home", ranking = current.page === "ranking" || current.page === "donors";
+    const home = current.page === "home", ranking = current.page === "ranking" || current.page === "donors", me = current.page === "me";
     $("#home-view").hidden = !home;
     $("#home-hero").hidden = !home;
     document.body.classList.toggle("is-home", home);
-    $("#page-view").hidden = home || ranking;
+    $("#page-view").hidden = home || ranking || me;
     $("#rank-view").hidden = !ranking;
-    if (current.page === "donors") {
+    $("#me-view").hidden = !me;
+    if (me) {
+      renderMe(current.sub);
+    } else if (current.page === "donors") {
       if (current.donor) renderDonorPage(current.donor);
       else renderDonorsRoute(current.params);
     } else if (ranking) {
@@ -148,8 +153,9 @@
   function renderUser() {
     const u = site.user;
     const myItems = [
-      `<button type="button" data-open="modal-backwall" data-need-login>백월 요청</button>`,
-      `<button type="button" data-open="modal-recommend" data-need-login>추천 노래</button>`,
+      `<button type="button" data-open="modal-recommend" data-need-login>시그 요청</button>`,
+      u?.member_id ? `<a href="#me/profile">내 프로필 · 공약 · 시그</a>` : "",
+      u?.member_id ? `<a href="#me/settle">정산</a>` : "",
       u?.role === "admin" ? `<a href="admin.html">관리자 페이지</a>` : "",
     ].filter(Boolean);
     $("#user-area").innerHTML = u
@@ -175,6 +181,7 @@
       await api("api/auth/logout", {}).catch(() => {});
       site.user = null;
       renderUser();
+      if (current.page === "me") location.hash = "#home";
     }
   });
 
@@ -195,7 +202,7 @@
     authForm.dataset.mode = tab.dataset.tab;
     $$(".tab", authForm).forEach((t) => t.classList.toggle("is-active", t === tab));
     $$(".signup-only", authForm).forEach((el) => (el.hidden = !signup));
-    ["password2", "nickname", "code"].forEach((n) => (authForm.elements[n].required = signup));
+    ["password2", "nickname", "real_name", "alias", "phone", "bank", "account", "code"].forEach((n) => (authForm.elements[n].required = signup));
     authForm.elements.password.autocomplete = signup ? "new-password" : "current-password";
     $(".form-note", authForm).textContent = "";
   }));
@@ -221,6 +228,7 @@
         $("#modal-login").close();
         if (openSigId) openSig(openSigId);
         if (current.page === "files") renderPage();
+        if (current.page === "me") renderMe(current.sub);
       }
     } catch (err) {
       note.textContent = err.message;
@@ -1413,6 +1421,187 @@
   });
   detail.addEventListener("close", () => { $("#detail-player").innerHTML = ""; });
 
+
+  /* ---------- 내 멤버 (프로필 편집 · 정산) ---------- */
+  const fmtWon = (n) => `${Number(n || 0).toLocaleString()}원`;
+  const fmtPct = (n) => `${Number(n || 0)}%`;
+  const fmtMonth = (m) => `${m.slice(0, 4)}년 ${Number(m.slice(5))}월`;
+
+  function uploadFile(url, file) {
+    return fetch(url, { method: "POST", headers: { "Content-Type": "application/octet-stream", "X-Upload": "1", "X-Filename": encodeURIComponent(file.name) }, body: file })
+      .then(async (r) => { const d = await r.json().catch(() => ({})); if (!r.ok) throw new Error(d.error || "업로드에 실패했습니다."); return d; });
+  }
+
+  function renderMe(sub) {
+    const view = $("#me-view");
+    if (!site.user) {
+      view.innerHTML = `<section class="panel">${empty("로그인 후 이용할 수 있습니다.")}<div class="more-wrap"><button type="button" class="primary-btn" data-open="modal-login">로그인</button></div></section>`;
+      return;
+    }
+    if (!site.user.member_id) {
+      view.innerHTML = `<section class="panel">${empty("아직 연결된 멤버가 없어요. 관리자에게 멤버 연결을 요청하세요.")}</section>`;
+      return;
+    }
+    const tabs = `<nav class="sub-tabs me-tabs">
+        <a href="#me/profile" class="${sub === "profile" ? "is-current" : ""}">프로필 · 공약 · 시그</a>
+        <a href="#me/settle" class="${sub === "settle" ? "is-current" : ""}">정산</a>
+      </nav>`;
+    view.innerHTML = `<section class="panel">${tabs}<div id="me-body">${empty("불러오는 중…")}</div></section>`;
+    (sub === "settle" ? renderMySettle : renderMyProfile)($("#me-body"));
+  }
+
+  // 본인 멤버 프로필 · 공약 · 대표 시그 편집
+  async function renderMyProfile(body) {
+    let m;
+    try { m = await api("api/me/member"); } catch (err) { body.innerHTML = empty(err.message); return; }
+    let picked = m.sig_ids.filter((id) => sigs.some((s) => s.id === id));
+    const imgBox = (url, kind) => url
+      ? `<img src="${esc(url)}" alt=""><button type="button" class="mini-btn me-img-del" data-img-del="${kind}" title="삭제">×</button>`
+      : `<span class="muted">없음</span>`;
+    body.innerHTML = `
+      <div class="me-head">
+        <p class="crumb">내 멤버</p>
+        <h2>${esc(m.name)}</h2>
+        <p class="hint">여기서 고친 내용은 바로 사이트의 멤버 카드에 반영돼요. 이름 · 크루 · 방송 채널은 관리자에게 요청하세요.</p>
+      </div>
+      <form class="me-form" id="me-form">
+        <div class="me-grid">
+          <div class="field">프로필 사진
+            <div class="me-img is-photo" id="me-photo">${imgBox(m.photo_url, "photo")}</div>
+            <label class="ghost-btn file-btn">사진 선택<input type="file" data-img="photo" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
+          </div>
+          <div class="me-fields">
+            <label class="field">한마디<input name="quote" maxlength="100" value="${esc(m.quote)}" placeholder="카드에 보이는 짧은 소개"></label>
+            <label class="field">인스타그램<input name="instagram" type="url" maxlength="300" value="${esc(m.instagram)}" placeholder="https://www.instagram.com/아이디"></label>
+            <label class="field">카카오톡 오픈채팅<input name="kakao" type="url" maxlength="300" value="${esc(m.kakao)}" placeholder="https://open.kakao.com/…"></label>
+          </div>
+        </div>
+        <label class="field">프로필<textarea name="profile_text" rows="7" maxlength="3000">${esc(m.profile_text)}</textarea></label>
+        <label class="field">공약<textarea name="promise_text" rows="5" maxlength="3000">${esc(m.promise_text)}</textarea></label>
+        <div class="field">공약 이미지
+          <div class="me-img is-promise" id="me-promise">${imgBox(m.promise_url, "promise")}</div>
+          <label class="ghost-btn file-btn">이미지 선택<input type="file" data-img="promise" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
+        </div>
+        <div class="field">대표 시그 <span class="muted" id="me-sig-count"></span>
+          <div class="me-sig-picked" id="me-sig-picked"></div>
+          <input type="search" id="me-sig-search" placeholder="시그 이름 · 단가로 찾아서 추가">
+          <div class="me-sig-options" id="me-sig-options"></div>
+        </div>
+        <div class="me-actions">
+          <p class="form-note" id="me-note" aria-live="polite"></p>
+          <button type="submit" class="primary-btn">저장</button>
+        </div>
+      </form>`;
+
+    const drawSigs = () => {
+      $("#me-sig-count").textContent = `${picked.length}개`;
+      $("#me-sig-picked").innerHTML = picked.length
+        ? picked.map((id) => sigs.find((s) => s.id === id)).filter(Boolean).map((s) => `<button type="button" class="pill on" data-unpick="${s.id}">${esc(s.name)} ×</button>`).join("")
+        : `<span class="muted">아래에서 시그를 눌러 추가하세요.</span>`;
+      const q = $("#me-sig-search").value.trim().toLowerCase().replace(/,/g, "");
+      const opts = sigs.filter((s) => !picked.includes(s.id) && (!q || s.name.toLowerCase().includes(q) || String(s.price).includes(q))).slice(0, 40);
+      $("#me-sig-options").innerHTML = opts.map((s) => `<button type="button" class="pill" data-pick="${s.id}">${esc(s.name)} <small>${won(s.price)}</small></button>`).join("") || `<span class="muted">맞는 시그가 없어요.</span>`;
+    };
+    drawSigs();
+    $("#me-sig-search").addEventListener("input", drawSigs);
+    body.onclick = async (e) => { // 다시 그려도 한 번만 걸리게
+      const pick = e.target.closest("[data-pick]"), un = e.target.closest("[data-unpick]"), del = e.target.closest("[data-img-del]");
+      if (pick) { picked.push(Number(pick.dataset.pick)); drawSigs(); }
+      if (un) { picked = picked.filter((id) => id !== Number(un.dataset.unpick)); drawSigs(); }
+      if (del) {
+        try { await api("api/me/member/image/delete", { kind: del.dataset.imgDel }); await refreshAfterEdit(); renderMyProfile(body); }
+        catch (err) { $("#me-note").textContent = err.message; }
+      }
+    };
+    $$("[data-img]", body).forEach((input) => input.addEventListener("change", async () => {
+      const file = input.files[0];
+      if (!file) return;
+      $("#me-note").textContent = "올리는 중…";
+      try { await uploadFile(`api/me/member/image?kind=${input.dataset.img}`, file); await refreshAfterEdit(); renderMyProfile(body); }
+      catch (err) { $("#me-note").textContent = err.message; }
+    }));
+    $("#me-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const f = Object.fromEntries(new FormData(e.target));
+      try {
+        await api("api/me/member", { ...f, sig_ids: picked });
+        await refreshAfterEdit();
+        $("#me-note").textContent = "저장했어요.";
+      } catch (err) { $("#me-note").textContent = err.message; }
+    });
+  }
+  // 고친 내용이 멤버 카드에도 바로 보이게
+  async function refreshAfterEdit() {
+    try { site.members = (await api("api/site")).members.filter(inCrew); } catch {}
+  }
+
+  // 내 정산 (본인 것만)
+  const SRC = [["soop", "SOOP"], ["yt_account", "유튜브 계좌후원"], ["yt_web", "유튜브 웹후원"]];
+  const entryName = (e) => e.kind === "excel" ? `엑셀 ${e.season}시즌 ${e.round}회차${e.round_title ? ` · ${e.round_title}` : ""}` : `개인방송 ${fmtMonth(e.month)}`;
+  const settleRows = (e) => {
+    const c = e.calc, t = e.terms;
+    const share = `${c.share} : ${Math.round((100 - c.share) * 100) / 100}`;
+    return `
+      <table class="settle-table">
+        <thead><tr><th>플랫폼</th><th class="num">후원금</th><th class="num">수수료</th><th class="num">수수료 뗀 금액</th></tr></thead>
+        <tbody>
+          ${SRC.map(([k, n]) => `<tr${c.by[k].gross ? "" : ' class="is-zero"'}><td>${n}</td><td class="num">${fmtWon(c.by[k].gross)}</td><td class="num">− ${fmtWon(c.by[k].fee)} <small>(${fmtPct(t[`fee_${k}`])})</small></td><td class="num">${fmtWon(c.by[k].net)}</td></tr>`).join("")}
+        </tbody>
+        <tfoot>
+          <tr><th>합계</th><td class="num">${fmtWon(c.gross)}</td><td class="num">− ${fmtWon(c.fee)}</td><td class="num"><b>${fmtWon(c.after_fee)}</b></td></tr>
+        </tfoot>
+      </table>
+      <dl class="settle-steps">
+        ${t.tax_mode === "after"
+          ? `<div><dt>회사와 나누기 (멤버 : 회사 = ${share})</dt><dd>회사 몫 − ${fmtWon(c.company)}</dd></div>
+             <div><dt>세금 ${fmtPct(t.tax)} (멤버 몫에서)</dt><dd>− ${fmtWon(c.tax)}</dd></div>`
+          : `<div><dt>세금 ${fmtPct(t.tax)}</dt><dd>− ${fmtWon(c.tax)}</dd></div>
+             <div><dt>회사와 나누기 (멤버 : 회사 = ${share})</dt><dd>회사 몫 − ${fmtWon(c.company)}</dd></div>`}
+        <div class="is-total"><dt>정산 받을 금액</dt><dd>${fmtWon(c.member)}</dd></div>
+      </dl>
+      ${e.memo ? `<p class="hint">메모: ${esc(e.memo)}</p>` : ""}`;
+  };
+
+  async function renderMySettle(body) {
+    let d;
+    try { d = await api("api/me/settle"); } catch (err) { body.innerHTML = empty(err.message); return; }
+    const t = d.terms;
+    body.innerHTML = `
+      <div class="me-head">
+        <p class="crumb">내 정산</p>
+        <h2>${esc(d.member.name)}</h2>
+        <p class="hint">본인 정산 내역만 보여요. 금액은 관리자가 엑셀 회차 · 개인방송 달마다 넣어요.</p>
+      </div>
+      <div class="settle-stats">
+        <div><span>누적 후원금</span><strong>${fmtWon(d.total.gross)}</strong></div>
+        <div><span>누적 정산 금액</span><strong>${fmtWon(d.total.member)}</strong></div>
+        <div><span>지급 완료</span><strong>${fmtWon(d.total.paid)}</strong></div>
+        <div><span>지급 예정</span><strong class="accent">${fmtWon(d.total.member - d.total.paid)}</strong></div>
+      </div>
+      <div class="settle-terms">
+        <b>지금 내 계약 조건</b>
+        <span>SOOP 수수료 ${fmtPct(t.fee_soop)}</span>
+        <span>유튜브 계좌후원 수수료 ${fmtPct(t.fee_yt_account)}</span>
+        <span>유튜브 웹후원 수수료 ${fmtPct(t.fee_yt_web)}</span>
+        <span>세금 ${fmtPct(t.tax)} (${t.tax_mode === "after" ? "나눈 뒤 내 몫에서" : "나누기 전에"})</span>
+        <span>엑셀 멤버 ${fmtPct(t.share_excel)}</span>
+        <span>개인방송 멤버 ${fmtPct(t.share_personal)}</span>
+      </div>
+      <h3 class="sub-head">월별 정산</h3>
+      ${d.months.length ? d.months.map((g, i) => `
+        <details class="settle-month" ${i === 0 ? "open" : ""}>
+          <summary>
+            <span class="settle-month-name">${fmtMonth(g.month)}</span>
+            <span class="settle-badge ${g.paid ? "is-paid" : ""}">${g.paid ? "지급 완료" : "정산 예정"}</span>
+            <span class="settle-month-sum"><small>후원 ${fmtWon(g.gross)}</small><b>${fmtWon(g.member)}</b></span>
+          </summary>
+          ${g.entries.map((e) => `
+            <section class="settle-entry">
+              <h4>${esc(entryName(e))} ${e.paid_at ? `<span class="settle-badge is-paid">지급 완료 ${fmtDate(e.paid_at)}</span>` : ""}</h4>
+              ${settleRows(e)}
+            </section>`).join("")}
+        </details>`).join("") : empty("아직 정산 내역이 없어요.")}`;
+  }
   /* ---------- 시그 ---------- */
   const isNew = (ms, days = NEW_DAYS) => ms && (Date.now() - ms) / 864e5 <= days;
   // 시그 단가: 별풍선 개수

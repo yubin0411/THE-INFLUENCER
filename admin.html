@@ -49,6 +49,7 @@
         <button type="button" role="tab" data-panel="broadcasts">방송 기록</button>
         <button type="button" role="tab" data-panel="sigs">시그 · 레슨 영상</button>
         <button type="button" role="tab" data-panel="files">파일</button>
+        <button type="button" role="tab" data-panel="settle">정산</button>
         <button type="button" role="tab" data-panel="brand">사이트 꾸미기</button>
         <button type="button" role="tab" data-panel="crews">크루 관리</button>
         <button type="button" role="tab" data-panel="requests">요청함 <span class="count" id="unread-count" hidden></span></button>
@@ -68,10 +69,26 @@
         </div>
         <div class="table-wrap">
           <table class="sig-table admin-table">
-            <thead><tr><th>아이디</th><th>닉네임</th><th>사용한 코드</th><th>가입일</th><th>상태</th><th class="right">관리</th></tr></thead>
+            <thead><tr><th>아이디</th><th>이름 (활동명)</th><th>가입 정보</th><th>연결 멤버</th><th>사용한 코드</th><th>가입일</th><th>상태</th><th class="right">관리</th></tr></thead>
             <tbody id="user-list"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- 정산 -->
+      <section class="panel" data-view="settle" hidden>
+        <div class="panel-head">
+          <h2>정산</h2>
+          <div class="chips" id="st-mode">
+            <button type="button" class="chip is-active" data-mode="excel">엑셀 방송</button>
+            <button type="button" class="chip" data-mode="personal">개인 방송</button>
+            <button type="button" class="chip" data-mode="month">월별 합계 · 지급</button>
+            <button type="button" class="chip" data-mode="terms">계약 조건</button>
+          </div>
+        </div>
+        <p class="hint" id="st-hint"></p>
+        <p class="form-note" id="st-note" aria-live="polite"></p>
+        <div id="st-body"></div>
       </section>
 
       <!-- 승인코드 -->
@@ -266,7 +283,7 @@
           <h2>요청함</h2>
           <div class="chips" id="request-filter">
             <button type="button" class="chip is-active" data-type="all">전체</button>
-            <button type="button" class="chip" data-type="recommend">추천 노래</button>
+            <button type="button" class="chip" data-type="recommend">시그 요청</button>
             <button type="button" class="chip" data-type="backwall">백월 요청</button>
           </div>
         </div>
