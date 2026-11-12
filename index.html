@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ko" data-theme="dark">
+<html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="theme-color" content="#111111">
+  <meta name="theme-color" content="#f1edf8">
   <title>ONE PICK</title>
   <link rel="icon" id="site-icon" href="data:,">
   <link rel="preconnect" href="https://cdn.jsdelivr.net">
@@ -12,12 +12,14 @@
   <script>
     // 저장된 테마를 먼저 적용해 깜빡임 방지
     try {
-      if (localStorage.getItem("eternal-theme") === "light") document.documentElement.dataset.theme = "light";
+      if (localStorage.getItem("eternal-theme") === "dark") document.documentElement.dataset.theme = "dark";
     } catch {}
   </script>
 </head>
 <body>
   <a class="skip-link" href="#main">본문 바로가기</a>
+  <!-- 배경: 관리자 › 사이트 꾸미기의 배너 사진을 화면 전체에 깔아 둠 -->
+  <div class="page-bg" id="page-bg" aria-hidden="true"></div>
 
   <header class="site-header">
     <div class="header-inner">
@@ -45,6 +47,18 @@
       <div class="mobile-user" id="mobile-user"></div>
     </div>
   </header>
+
+  <!-- 홈 맨 위 배너: 화면 가로 꽉 차게 + 아래 숫자 카드 -->
+  <section class="hero" id="home-hero" hidden>
+    <div class="hero-img" id="hero-img"></div>
+    <div class="hero-stats-wrap">
+      <dl class="hero-stats">
+        <div><dt>시그니처</dt><dd id="stat-sigs">0</dd></div>
+        <div><dt>멤버</dt><dd id="stat-members">0</dd></div>
+        <div><dt class="is-live"><span class="live-dot" aria-hidden="true"></span>LIVE</dt><dd id="stat-live">0</dd></div>
+      </dl>
+    </div>
+  </section>
 
   <main id="main" class="main">
     <h1 class="sr-only">ONE PICK 통합 홈</h1>

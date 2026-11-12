@@ -63,6 +63,8 @@
     closeMobileNav();
     const home = current.page === "home", ranking = current.page === "ranking" || current.page === "donors";
     $("#home-view").hidden = !home;
+    $("#home-hero").hidden = !home;
+    document.body.classList.toggle("is-home", home);
     $("#page-view").hidden = home || ranking;
     $("#rank-view").hidden = !ranking;
     if (current.page === "donors") {
@@ -313,7 +315,15 @@
       </a>`;
 
   // 유튜브 · SOOP 방송을 한 칸에 같이 (시청자 많은 순)
+  // 홈 배너 아래 숫자 카드 (시그니처 · 멤버 · LIVE)
+  function renderHeroStats() {
+    $("#stat-sigs").textContent = fmtNum(sigs.length);
+    $("#stat-members").textContent = fmtNum(site.members.length);
+    $("#stat-live").textContent = fmtNum(new Set(liveNow.map((l) => l.member)).size);
+  }
+
   function renderLive() {
+    renderHeroStats();
     const yt = liveNow.filter((l) => l.platform !== "soop").length, sp = liveNow.length - yt;
     $("#live-note").textContent = liveNow.length ? `방송 중 ${liveNow.length}${yt && sp ? ` · 유튜브 ${yt} · SOOP ${sp}` : ""}` : "";
     $("#live-list").innerHTML = liveNow.length ? liveNow.map(liveCard).join("") : empty("지금 방송 중인 멤버가 없어요. 방송을 켜면 1분 안에 여기에 떠요.");
@@ -1417,22 +1427,23 @@
   const sigBadges = (s) =>
     `${s.ref_url ? `<span class="pill">레퍼런스${refsOf(s).length > 1 ? ` ${refsOf(s).length}` : ""}</span>` : ""}${s.lessons ? `<span class="pill on">레슨 ${s.lessons}</span>` : ""}`;
 
-  // 가격표 이미지 보기: 시그 이미지가 있으면 이미지, 없으면 글자 카드
-  const sigImageCard = (s) => `
-    <button type="button" class="sig-image-card ${s.image_url ? "" : "no-image"}" data-sig-open="${s.id}">
-      ${s.image_url
-        ? `<img src="${esc(s.image_url)}" alt="${esc(s.name)} ${won(s.price)}" loading="lazy">`
-        : `<span class="sig-image-text"><span class="cat">${esc(s.category)}</span><strong>${esc(s.name)}</strong><span class="sig-price">${won(s.price)}</span></span>`}
-      ${isNew(s.created_at) ? '<span class="badge-new">NEW</span>' : ""}
-      ${s.audio_url ? '<span class="has-audio" title="음원 있음">♪</span>' : ""}
+  // 시그 카드: 위는 16:9 이미지(없으면 이름), 아래는 이름 · 가격
+  const sigTile = (s, showDate) => `
+    <button type="button" class="sig-tile" data-sig-open="${s.id}">
+      <span class="sig-tile-img">
+        ${s.image_url
+          ? `<img src="${esc(s.image_url)}" alt="${esc(s.name)}" loading="lazy" decoding="async">`
+          : `<span class="sig-tile-text">${esc(s.name)}</span>`}
+        ${isNew(s.created_at) ? '<span class="badge-new">NEW</span>' : ""}
+        ${s.audio_url ? '<span class="has-audio" title="음원 있음">♪</span>' : ""}
+      </span>
+      <span class="sig-tile-cap">
+        <span class="sig-tile-row"><strong>${esc(s.name)}</strong><b class="sig-tile-price">${won(s.price)}</b></span>
+        <span class="sig-badges">${s.category ? `<span class="cat">${esc(s.category)}</span>` : ""}${sigBadges(s)}${showDate && s.last_lesson_at ? `<span class="muted">${fmtAgo(s.last_lesson_at)}</span>` : ""}</span>
+      </span>
     </button>`;
-
-  const sigCard = (s, showDate) => `
-    <button type="button" class="sig-card" data-sig-open="${s.id}">
-      <strong>${esc(s.name)} ${isNew(s.created_at) ? '<span class="badge-new">NEW</span>' : ""}</strong>
-      <span class="sig-price">${won(s.price)}</span>
-      <span class="sig-badges">${sigBadges(s)}${showDate && s.last_lesson_at ? `<span class="muted">${fmtAgo(s.last_lesson_at)}</span>` : ""}</span>
-    </button>`;
+  const sigImageCard = (s) => sigTile(s);
+  const sigCard = (s, showDate) => sigTile(s, showDate);
 
   // 검색 + 페이지 나누기가 있는 시그 표 (홈의 "새로 들어온 시그", 크루별 "전체 가격표")
   function sigTable({ search, body, pager, rows, sort = () => "sheet", showCrew = false, grid = () => null }) {
@@ -1566,12 +1577,15 @@
     mark.innerHTML = b.logo ? `<img src="${esc(b.logo)}" alt="">` : "1";
     if (b.logo) $("#site-icon").href = b.logo;
 
-    const banner = $("#home-banner");
-    banner.hidden = !b.banner;
-    if (b.banner) {
-      const img = `<img src="${esc(b.banner)}" alt="ONE PICK 배너">`;
-      banner.innerHTML = b.banner_link ? `<a href="${esc(b.banner_link)}" target="_blank" rel="noopener">${img}</a>` : img;
-    }
+    // 배너 사진은 화면 전체 배경으로 깔림 (위에 연한 막을 덮어 글씨가 잘 보이게)
+    $("#home-banner").hidden = true;
+    const bg = $("#page-bg");
+    bg.innerHTML = b.banner ? `<img src="${esc(b.banner)}" alt="">` : "";
+    document.body.classList.toggle("has-bg", !!b.banner);
+    // 홈 맨 위에도 같은 배너를 가로 꽉 차게 (링크가 있으면 누르면 이동)
+    const hero = b.banner ? `<img src="${esc(b.banner)}" alt="ONE PICK 배너" fetchpriority="high">` : "";
+    $("#hero-img").innerHTML = hero && b.banner_link ? `<a href="${esc(b.banner_link)}" target="_blank" rel="noopener">${hero}</a>` : hero;
+    $("#home-hero").classList.toggle("no-img", !b.banner);
 
     const sns = [["youtube", "YouTube", b.youtube_url], ["soop", "SOOP", b.soop_url]];
     $("#footer-sns").innerHTML = sns.map(([pf, name, url]) => url

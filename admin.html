@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="ko" data-theme="dark">
+<html lang="ko">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -10,7 +10,7 @@
   <link rel="stylesheet" href="css/admin.css">
   <script>
     try {
-      if (localStorage.getItem("eternal-theme") === "light") document.documentElement.dataset.theme = "light";
+      if (localStorage.getItem("eternal-theme") === "dark") document.documentElement.dataset.theme = "dark";
     } catch {}
   </script>
 </head>
@@ -226,7 +226,7 @@
           </div>
           <div class="box">
             <h3>홈 배너</h3>
-            <p class="hint">홈 맨 위(라이브 시간 랭킹 위)에 들어갑니다. <b>1920×480 (가로:세로 4:1)</b> 크기가 딱 맞습니다. 비율이 다르면 가운데 기준으로 잘립니다.</p>
+            <p class="hint">홈 맨 위에 화면 가로 꽉 차게 들어가고, 모든 화면의 배경으로도 깔립니다. <b>가로로 긴 사진(예: 3840×1080)</b>이 잘 어울려요.</p>
             <div class="brand-preview is-banner" id="brand-banner"></div>
             <div class="inline-form">
               <label class="ghost-btn file-btn">이미지 선택<input type="file" data-brand-file="banner" accept="image/png,image/jpeg,image/gif,image/webp" hidden></label>
