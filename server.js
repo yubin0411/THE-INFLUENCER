@@ -16,6 +16,8 @@ const { db, tx, DATA_DIR, linkMembers } = require("./lib/db");
 const auth = require("./lib/auth");
 const youtube = require("./lib/youtube");
 const soop = require("./lib/soop");
+const ytchat = require("./lib/ytchat");
+const soopchat = require("./lib/soopchat");
 const broadcasts = require("./lib/broadcasts");
 const sheet = require("./lib/sheet");
 
@@ -143,7 +145,7 @@ route("GET", "/api/live", () => {
 //   platform = all | soop | youtube, category = all | game | talk | …, sort = time | peak | viewers | followers
 //   crew = 크루 ID (주면 그 크루 멤버와 크루 없는 멤버만)
 const rankQuery = (url) => {
-  const q = Object.fromEntries(["period", "from", "to", "platform", "category", "sort"].map((k) => [k, url.searchParams.get(k) || undefined]));
+  const q = Object.fromEntries(["period", "from", "to", "platform", "category", "sort", "dplat"].map((k) => [k, url.searchParams.get(k) || undefined]));
   const crew = url.searchParams.get("crew");
   if (crew) q.members = new Set(db.prepare("SELECT id FROM members WHERE crew_id IS NULL OR crew_id = ?").all(crew).map((r) => String(r.id)));
   return q;
@@ -381,6 +383,13 @@ route("POST", "/api/admin/users/:id", async (req, p) => {
     db.prepare("UPDATE users SET role = ? WHERE id = ?").run(b.role, id);
   } else fail(400, "잘못된 요청입니다.");
   return { ok: true };
+});
+
+// 후원 수집 상태 (SOOP 채팅 연결 · 유튜브 채팅 읽기 · 저장된 건수)
+route("GET", "/api/admin/collect", (req) => {
+  requireAdmin(req);
+  return { soop: soopchat.status(), youtube: ytchat.status(),
+    saved: db.prepare("SELECT platform, COUNT(*) AS count, SUM(amount) AS total, MAX(at) AS last_at FROM donations GROUP BY platform").all() };
 });
 
 route("GET", "/api/admin/codes", (req) => {
@@ -1493,6 +1502,7 @@ http.createServer(async (req, res) => {
   setInterval(auth.cleanupSessions, 60 * 60 * 1000);
   youtube.startScheduler();
   soop.startScheduler();
+  ytchat.startScheduler(); // 유튜브 슈퍼챗 기록
   // 구글 시트 → 시그 목록 (5분마다)
   setTimeout(syncAllSheets, 10 * 1000);
   setInterval(syncAllSheets, 5 * 60 * 1000);

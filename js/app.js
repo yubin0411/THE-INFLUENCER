@@ -356,11 +356,17 @@
     it.thumb ? `<img class="${cls}" src="${esc(it.thumb)}" alt="" loading="lazy">` : `<span class="${cls} member-avatar" aria-hidden="true"></span>`;
 
   const PLATFORMS = [{ id: "all", name: "전체" }, { id: "soop", name: "SOOP" }, { id: "youtube", name: "유튜브" }];
+  // 후원 단위: SOOP 은 별풍선 개수, 유튜브는 슈퍼챗 원(₩). 한 화면에는 한 플랫폼만 보여 줌 (DP = 지금 보고 있는 후원 플랫폼)
+  let DP = "soop";
+  const dn = (v, p = DP) => (p === "youtube" ? `₩${fmtNum(v)}` : `🎈 ${fmtNum(v)}개`);
+  const dnPlain = (v, p = DP) => (p === "youtube" ? `${fmtNum(v)}원` : `${fmtNum(v)}개`);
+  const DN_NAME = { soop: "SOOP 별풍선", youtube: "유튜브 슈퍼챗" };
+  const rkDp = () => (RK.platform === "youtube" ? "youtube" : "soop");
   const SORTS_RK = [
     { id: "time", name: "방송시간 순", unit: (it) => fmtHours(it.seconds) },
     { id: "viewers", name: "현재 시청자 순", unit: (it) => `시청 ${fmtNum(it.live_viewers)}명` },
     { id: "peak", name: "최고 시청자 순", unit: (it) => `최고 ${fmtNum(it.peak)}명` },
-    { id: "donation", name: "후원 순", unit: (it) => `🎈 ${fmtNum(it.donation)}개` },
+    { id: "donation", name: "후원 순", unit: (it) => dn(it.donation, rkDp()) },
     { id: "followers", name: "팔로워 증가 순", unit: (it) => (it.follower_known ? `팔로워 ${it.follower_gain >= 0 ? "+" : ""}${fmtNum(it.follower_gain)}` : "팔로워 -") },
   ];
   const sortValue = (it, sort) => ({ time: it.seconds, viewers: it.live_viewers, peak: it.peak, followers: it.follower_gain, donation: it.donation }[sort] || 0);
@@ -535,6 +541,7 @@
   }
 
   function drawRankList(animate) {
+    DP = rkDp();
     const d = rkData;
     const sort = SORTS_RK.find((s) => s.id === RK.sort);
     const q = RK.q.trim().toLowerCase();
@@ -542,7 +549,7 @@
     const ranked = items.filter((it) => sortValue(it, RK.sort) > 0);
     const rest = items.filter((it) => !(sortValue(it, RK.sort) > 0));
     if (q) items = items.filter((it) => it.name.toLowerCase().includes(q));
-    const what = { time: "방송 시간", viewers: "현재 시청자 수", peak: "최고 시청자 수", followers: "팔로워 증가", donation: "받은 후원(별풍선)" }[RK.sort];
+    const what = { time: "방송 시간", viewers: "현재 시청자 수", peak: "최고 시청자 수", followers: "팔로워 증가", donation: `받은 후원(${rkDp() === "youtube" ? "슈퍼챗" : "별풍선"})` }[RK.sort];
     $("#rk-range").innerHTML = `📅 <b>${rangeText(d.period)}</b> ${esc(d.period.label)} 동안 집계된 ${what} 기준 순위예요.${RK.platform !== "all" ? ` · ${RK.platform === "soop" ? "SOOP" : "유튜브"}만` : ""}${RK.category !== "all" ? ` · ${catName(RK.category)}` : ""}`;
     $("#rk-metric-label").textContent = what;
     const max = Math.max(1, ...ranked.map((it) => sortValue(it, RK.sort)));
@@ -644,7 +651,7 @@
   const MD_TABS = [{ id: "home", name: "홈" }, { id: "schedule", name: "방송 일정" }, { id: "records", name: "방송 기록" }, { id: "donors", name: "후원자 랭킹" }, { id: "activity", name: "순위 · 활동" }];
   const METRICS = [
     { id: "seconds", name: "방송시간", fmt: fmtHours, axis: fmtHoursShort, total: (d) => fmtHours(d.reduce((a, x) => a + x.seconds, 0)), totalNote: "합계 방송 시간" },
-    { id: "donation", name: "후원", fmt: (v) => `${fmtNum(v)}개`, axis: (v) => fmtCount(v), total: (d) => `${fmtNum(d.reduce((a, x) => a + (x.donation || 0), 0))}개`, totalNote: "받은 별풍선 합계" },
+    { id: "donation", name: "후원", fmt: (v) => dnPlain(v), axis: (v) => fmtCount(v), total: (d) => dnPlain(d.reduce((a, x) => a + (x.donation || 0), 0)), get totalNote() { return DP === "youtube" ? "받은 슈퍼챗 합계" : "받은 별풍선 합계"; } },
     { id: "peak", name: "최고 시청자", fmt: (v) => `${fmtNum(v)}명`, axis: (v) => fmtCount(v), total: (d) => `${fmtNum(Math.max(0, ...d.map((x) => x.peak)))}명`, totalNote: "기간 최고 시청자" },
     { id: "avg", name: "평균 시청자", fmt: (v) => `${fmtNum(v)}명`, axis: (v) => fmtCount(v), total: (d) => { const on = d.filter((x) => x.avg); return `${fmtNum(on.length ? Math.round(on.reduce((a, x) => a + x.avg, 0) / on.length) : 0)}명`; }, totalNote: "방송한 날 평균" },
     { id: "followers", name: "팔로워", fmt: (v) => `${fmtNum(v)}명`, axis: (v) => fmtCount(v), total: (d) => { const f = d.filter((x) => x.followers != null); return f.length ? `${fmtNum(f.at(-1).followers)}명` : "-"; }, totalNote: "기간 마지막 팔로워" },
@@ -656,7 +663,7 @@
     const view = $("#rank-view");
     if (!md || md.member.id !== id) view.innerHTML = `<section class="rk-page">${empty("불러오는 중…")}</section>`;
     let data;
-    try { data = await api(`api/ranking/member/${encodeURIComponent(id)}?${rkQuery({ sort: "time" })}`); }
+    try { data = await api(`api/ranking/member/${encodeURIComponent(id)}?${rkQuery({ sort: "time", dplat: DN.dplat })}`); }
     catch { if (seq === mdSeq) view.innerHTML = `<section class="rk-page">${empty("멤버를 찾을 수 없어요.")} <p><a class="ghost-btn" href="#ranking">← 랭킹으로</a></p></section>`; return; }
     if (seq !== mdSeq || current.member !== id) return;
     md = data;
@@ -666,6 +673,7 @@
   }
 
   function drawMember() {
+    DP = md.donation?.platform || "soop";
     const { member: m, summary: s, period: per } = md;
     const months = rkData?.months || homeData.time?.months || [];
     $("#rank-view").innerHTML = `
@@ -712,7 +720,7 @@
           ${statTile("최고 시청자", s?.peak ? `${fmtNum(s.peak)}명` : "-")}
           ${statTile("평균 시청자", s?.avg ? `${fmtNum(s.avg)}명` : "-")}
           ${statTile("팔로워 증가", s?.follower_gain != null ? `${s.follower_gain >= 0 ? "+" : ""}${fmtNum(s.follower_gain)}명` : "-", s?.followers != null ? `현재 ${fmtNum(s.followers)}명` : "기록 쌓는 중")}
-          ${statTile("받은 후원", `🎈 ${fmtNum(md.donation.total)}개`, md.donation.collected ? `후원자 ${fmtNum(md.donation.donors)}명 · ${fmtNum(md.donation.count)}건` : "후원 수집 연결 전")}
+          ${statTile("받은 후원", dn(md.donation.total), md.donation.collected ? `후원자 ${fmtNum(md.donation.donors)}명 · ${fmtNum(md.donation.count)}건` : "후원 수집 연결 전")}
         </div>
         <div class="md-grid">
           <section class="md-card">
@@ -727,7 +735,7 @@
           </section>
           <aside class="md-side">
             <section class="md-card">
-              <div class="md-card-head"><h3>🎈 후원자 TOP</h3><small class="muted">${esc(md.period.label)}</small></div>
+              <div class="md-card-head"><h3>${DP === "youtube" ? "💸" : "🎈"} 후원자 TOP</h3><small class="muted">${esc(md.period.label)}</small></div>
               ${donorMini(md.donors.slice(0, 10))}
               ${md.donors.length > 10 ? '<button type="button" class="text-link" data-md-tab="donors">후원자 전체 보기 ›</button>' : ""}
             </section>
@@ -743,18 +751,19 @@
     } else if (mdTab === "donors") {
       const d = md.donation;
       body.innerHTML = `
+        <div class="md-dn-head">${dnToggle()}</div>
         <div class="md-stats">
-          ${statTile("받은 후원", `🎈 ${fmtNum(d.total)}개`)}
+          ${statTile("받은 후원", dn(d.total))}
           ${statTile("후원자", `${fmtNum(d.donors)}명`)}
           ${statTile("후원 건수", `${fmtNum(d.count)}건`)}
-          ${statTile("1위 후원자", md.donors[0] ? esc(md.donors[0].nick) : "-", md.donors[0] ? `${fmtNum(md.donors[0].total)}개` : "")}
+          ${statTile("1위 후원자", md.donors[0] ? esc(md.donors[0].nick) : "-", md.donors[0] ? dnPlain(md.donors[0].total) : "")}
         </div>
         <div class="md-grid">
           <section class="md-card"><h3>후원자 랭킹 <small class="muted">${esc(md.period.label)}</small></h3>
             ${md.donors.length ? `<ol class="dn-list">${md.donors.map((x, i) => donorLine(x, i, md.donors[0].total)).join("")}</ol>` : noDonations(d.collected)}
           </section>
           <section class="md-card"><h3>최근 후원</h3>
-            ${md.recent_donations.length ? `<ul class="dn-recent">${md.recent_donations.map((r) => `<li><a href="#donors/${encodeURIComponent(r.key)}"><strong>${esc(r.nick)}</strong></a><b>🎈 ${fmtNum(r.amount)}개</b><time>${fmtTime(r.at)}</time></li>`).join("")}</ul>` : noDonations(d.collected)}
+            ${md.recent_donations.length ? `<ul class="dn-recent">${md.recent_donations.map((r) => `<li><a href="#donors/${encodeURIComponent(r.key)}"><strong>${esc(r.nick)}</strong></a><b>${dn(r.amount)}</b><time>${fmtTime(r.at)}</time></li>`).join("")}</ul>` : noDonations(d.collected)}
           </section>
         </div>`;
     } else if (mdTab === "records") {
@@ -793,7 +802,7 @@
       <td class="num">${fmtHours(b.seconds)}</td>
       <td class="num">${b.peak ? `${fmtNum(b.peak)}명` : "-"}</td>
       <td class="num">${b.avg ? `${fmtNum(b.avg)}명` : "-"}</td>
-      <td class="num">${b.donation ? `🎈 ${fmtNum(b.donation)}` : "-"}</td>
+      <td class="num">${b.donation ? dn(b.donation) : "-"}</td>
     </tr>`;
 
   // 그날 기록 (그래프 점 · 달력 칸을 눌렀을 때)
@@ -813,7 +822,7 @@
         <div class="md-day-stats">
           <span>방송 <b>${fmtHours(x?.seconds || 0)}</b></span><span>횟수 <b>${x?.sessions || 0}회</b></span>
           <span>최고 <b>${x?.peak ? `${fmtNum(x.peak)}명` : "-"}</b></span><span>평균 <b>${x?.avg ? `${fmtNum(x.avg)}명` : "-"}</b></span>
-          <span>팔로워 <b>${x?.followers != null ? fmtNum(x.followers) : "-"}</b></span><span>후원 <b>🎈 ${fmtNum(x?.donation || 0)}개</b></span>
+          <span>팔로워 <b>${x?.followers != null ? fmtNum(x.followers) : "-"}</b></span><span>후원 <b>${dn(x?.donation || 0)}</b></span>
         </div>
         ${list.length ? `<div class="table-wrap"><table class="sig-table md-records"><tbody>${list.map(sessionRow).join("")}</tbody></table></div>` : '<p class="side-empty">이날은 방송하지 않았어요.</p>'}
       </div>`;
@@ -846,9 +855,9 @@
   // 일별 그래프 (한 번에 한 항목 · 선 + 영역 · 마우스를 올리면 값)
   function drawChart(el, daily, metric, onPick = showDay) {
     const vals = daily.map((d) => (metric.id === "followers" ? d.followers : d[metric.id]));
-    if (metric.id === "donation" && md && !md.donation?.collected && onPick === showDay) { el.innerHTML = empty("별풍선 수집이 연결되면 날짜별 후원이 여기에 나와요."); return; }
+    if (metric.id === "donation" && md && !md.donation?.collected && onPick === showDay) { el.innerHTML = empty(`${DN_NAME[DP]} 수집이 연결되면 날짜별 후원이 여기에 나와요.`); return; }
     if (vals.every((v) => v == null)) {
-      el.innerHTML = empty(metric.id === "donation" ? "후원(별풍선) 집계는 아직 연결되지 않았어요." : metric.id === "followers" ? "팔로워 수는 오늘부터 하루 한 번씩 기록돼요." : "이 기간 기록이 없어요.");
+      el.innerHTML = empty(metric.id === "donation" ? `후원(${DN_NAME[DP]}) 집계는 아직 연결되지 않았어요.` : metric.id === "followers" ? "팔로워 수는 오늘부터 하루 한 번씩 기록돼요." : "이 기간 기록이 없어요.");
       return;
     }
     const W = Math.max(300, el.clientWidth || 700), H = 260, L = 52, R = 14, T = 16, B = 30;
@@ -941,10 +950,10 @@
   /* ---------- 후원자 랭킹 ---------- */
   const donorHref = (key) => `#donors/${encodeURIComponent(key)}`;
   const donorAvatar = (nick = "", cls = "") => `<span class="dn-avatar ${cls}" aria-hidden="true">${esc([...String(nick).trim()][0] || "?")}</span>`;
-  const noDonations = (collected) => `<p class="side-empty">${collected ? "이 기간에는 후원 기록이 없어요." : "별풍선 수집이 연결되면 후원 기록이 여기에 쌓여요."}</p>`;
+  const noDonations = (collected) => `<p class="side-empty">${collected ? "이 기간에는 후원 기록이 없어요." : `${DN_NAME[DP]} 기록이 아직 없어요. 방송 중에 들어온 후원부터 여기에 쌓여요.`}</p>`;
   // 멤버 화면 옆 칸: 후원자 TOP 10
   const donorMini = (list) => (list.length
-    ? `<ol class="dn-mini">${list.map((x) => `<li><a href="${donorHref(x.key)}">${rankBadge(x.rank)}<strong>${esc(x.nick)}</strong><b>${fmtNum(x.total)}개</b></a></li>`).join("")}</ol>`
+    ? `<ol class="dn-mini">${list.map((x) => `<li><a href="${donorHref(x.key)}">${rankBadge(x.rank)}<strong>${esc(x.nick)}</strong><b>${dnPlain(x.total)}</b></a></li>`).join("")}</ol>`
     : noDonations(md?.donation?.collected));
   // 후원자 한 줄 (멤버 화면 · 전체 화면 공용)
   const donorLine = (x, i, max) => `
@@ -954,15 +963,17 @@
         ${donorAvatar(x.nick)}
         <span class="rk-info">
           <span class="rk-line1">${x.platform ? pfTag(x.platform) : ""}<strong>${esc(x.nick)}</strong></span>
-          <span class="rk-line2">${x.to?.length ? x.to.slice(0, 3).map((t) => `<span class="dn-to">→ ${esc(t.name)} ${fmtNum(t.amount)}</span>`).join("") + (x.to.length > 3 ? ` 외 ${x.to.length - 3}명` : "") : `${fmtNum(x.count)}번 후원 · 마지막 ${fmtAgo(x.last_at)}`}</span>
+          <span class="rk-line2">${x.to?.length ? x.to.slice(0, 3).map((t) => `<span class="dn-to">→ ${esc(t.name)} ${dnPlain(t.amount)}</span>`).join("") + (x.to.length > 3 ? ` 외 ${x.to.length - 3}명` : "") : `${fmtNum(x.count)}번 후원 · 마지막 ${fmtAgo(x.last_at)}`}</span>
         </span>
         <span class="rk-bar" aria-hidden="true"><span style="width:${Math.round((x.total / Math.max(1, max)) * 100)}%"></span></span>
-        <span class="rk-value"><strong>🎈 ${fmtNum(x.total)}개</strong><small>${fmtNum(x.count)}건</small></span>
+        <span class="rk-value"><strong>${dn(x.total)}</strong><small>${fmtNum(x.count)}건</small></span>
         ${x.change !== undefined ? changeMark(x.change) : '<span class="rk-change"></span>'}
       </a>
     </li>`;
 
-  const DN = { member: "all", q: "" };
+  const DN = { member: "all", q: "", dplat: "soop" };
+  const dnToggle = () => `<div class="seg" role="group" aria-label="후원 플랫폼">${["soop", "youtube"].map((p) =>
+    `<button type="button" data-dn-plat="${p}" class="${DN.dplat === p ? "is-active" : ""}">${logo(p)} ${p === "youtube" ? "슈퍼챗" : "별풍선"}</button>`).join("")}</div>`;
   let dnData = null, dnSeq = 0;
 
   function renderDonorsRoute(params) {
@@ -971,10 +982,12 @@
   }
 
   function renderDonorsPage() {
+    DP = DN.dplat;
     const members = site.members.filter((m) => m.soop || m.youtube);
     $("#rank-view").innerHTML = `
       <section class="rk-page">
-        <div class="rk-page-head"><h2>후원자 랭킹</h2><span class="head-note">SOOP 별풍선 기준 · 실시간 집계</span></div>
+        <div class="rk-page-head"><h2>후원자 랭킹</h2>${dnToggle()}</div>
+        <p class="head-note">${DN.dplat === "youtube" ? "유튜브 슈퍼챗 · 슈퍼스티커 기준 (원)" : "SOOP 별풍선 기준 (개)"} · 실시간 집계</p>
         <div class="rk-filters">
           <div class="rk-filter-row">
             <div class="chips dn-members">
@@ -990,7 +1003,7 @@
           <div class="rk-main">
             <ol class="rk-podium" id="dn-podium"></ol>
             <div class="rk-table">
-              <div class="rk-table-head"><span>순위 · 후원자</span><span>후원 별풍선</span></div>
+              <div class="rk-table-head"><span>순위 · 후원자</span><span>${DN.dplat === "youtube" ? "후원 금액" : "후원 별풍선"}</span></div>
               <ol class="rk-list" id="dn-list"><li>${empty("불러오는 중…")}</li></ol>
             </div>
           </div>
@@ -1003,7 +1016,7 @@
   async function loadDonors() {
     const seq = ++dnSeq;
     try {
-      const d = await api(`api/donors?${rkQuery(DN.member === "all" ? { sort: null } : { sort: null, member: DN.member })}`);
+      const d = await api(`api/donors?${rkQuery({ sort: null, platform: null, dplat: DN.dplat, ...(DN.member === "all" ? {} : { member: DN.member }) })}`);
       if (seq !== dnSeq || current.page !== "donors" || current.donor) return;
       const first = !dnData;
       dnData = d;
@@ -1016,8 +1029,9 @@
 
   function drawDonors() {
     const d = dnData;
+    DP = d.dplat || DN.dplat;
     const who = DN.member === "all" ? "전체 멤버" : site.members.find((m) => m.id === DN.member)?.name || "";
-    $("#dn-range").innerHTML = `📅 <b>${rangeText(d.period)}</b> ${esc(d.period.label)} · ${esc(who)}가 받은 후원 <b>🎈 ${fmtNum(d.total)}개</b> · 후원자 ${fmtNum(d.donors)}명 · ${fmtNum(d.count)}건`;
+    $("#dn-range").innerHTML = `📅 <b>${rangeText(d.period)}</b> ${esc(d.period.label)} · ${esc(who)}가 받은 후원 <b>${dn(d.total)}</b> · 후원자 ${fmtNum(d.donors)}명 · ${fmtNum(d.count)}건`;
     const q = DN.q.trim().toLowerCase();
     const items = q ? d.items.filter((x) => x.nick.toLowerCase().includes(q) || x.donor_id.toLowerCase().includes(q)) : d.items;
     const top3 = q ? [] : items.slice(0, 3);
@@ -1029,7 +1043,7 @@
           ${donorAvatar(x.nick, "big")}
           <span class="rk-pod-tags">${pfTag(x.platform)}</span>
           <strong class="rk-pod-name">${esc(x.nick)}</strong>
-          <span class="rk-pod-value">🎈 ${fmtNum(x.total)}개</span>
+          <span class="rk-pod-value">${dn(x.total)}</span>
           <span class="rk-pod-sub">${fmtNum(x.count)}번 후원${x.to[0] ? ` · 최다 ${esc(x.to[0].name)}` : ""}</span>
           ${x.change !== undefined ? changeMark(x.change) : ""}
         </a>
@@ -1037,33 +1051,34 @@
     const rest = q ? items : items.slice(3);
     const max = d.items[0]?.total || 1;
     $("#dn-list").innerHTML = rest.length ? rest.map((x, i) => donorLine(x, i, max)).join("")
-      : top3.length ? "" : `<li>${empty(q ? "검색 결과가 없어요." : d.count ? "이 기간에는 후원 기록이 없어요." : "별풍선 수집이 연결되면 후원자 순위가 여기에 나와요.")}</li>`;
+      : top3.length ? "" : `<li>${empty(q ? "검색 결과가 없어요." : d.count ? "이 기간에는 후원 기록이 없어요." : `${DN_NAME[DP]} 기록이 아직 없어요. 방송 중에 들어온 후원부터 순위가 나와요.`)}</li>`;
     const rising = d.items.filter((x) => typeof x.change === "number" && x.change > 0).sort((a, b) => b.change - a.change).slice(0, 5);
     $("#dn-side").innerHTML = `
       <section class="side-card"><h3>👑 후원 많이 받은 멤버</h3>
-        ${d.receivers.length ? d.receivers.slice(0, 8).map((r, i) => `<a class="side-row" href="${memberHref(r.id)}"><span class="side-num">${i + 1}</span><span class="rk-avatar small">${memberAvatar(r)}</span><strong>${esc(r.name)}</strong><b>🎈 ${fmtNum(r.amount)}</b></a>`).join("") : '<p class="side-empty">아직 기록이 없어요.</p>'}
+        ${d.receivers.length ? d.receivers.slice(0, 8).map((r, i) => `<a class="side-row" href="${memberHref(r.id)}"><span class="side-num">${i + 1}</span><span class="rk-avatar small">${memberAvatar(r)}</span><strong>${esc(r.name)}</strong><b>${dn(r.amount)}</b></a>`).join("") : '<p class="side-empty">아직 기록이 없어요.</p>'}
       </section>
       <section class="side-card"><h3>📈 큰손 급상승</h3>
         ${rising.length ? rising.map((x) => `<a class="side-row" href="${donorHref(x.key)}">${donorAvatar(x.nick, "small")}<strong>${esc(x.nick)}</strong>${changeMark(x.change)}</a>`).join("") : '<p class="side-empty">어제보다 순위가 오른 후원자가 없어요.</p>'}
       </section>
       <section class="side-card"><h3>✦ 집계 기준</h3>
-        <p class="side-empty">멤버 SOOP 방송 채팅에 올라오는 별풍선 선물을 그대로 모아서 셉니다. 서버가 꺼져 있던 시간의 후원은 빠질 수 있는 추정치예요.</p>
+        <p class="side-empty">${DP === "youtube" ? "멤버 유튜브 라이브 채팅의 슈퍼챗 · 슈퍼스티커를 모아서 셉니다. 외화는 대략 환율로 원 환산했어요." : "멤버 SOOP 방송 채팅에 올라오는 별풍선 선물을 그대로 모아서 셉니다. 애드벌룬 · 영상풍선은 빠져 있어요."} 서버가 꺼져 있던 시간의 후원은 빠질 수 있는 추정치예요.</p>
         <p class="side-foot">후원자를 누르면 누구에게 언제 얼마나 후원했는지 자세히 볼 수 있어요.</p>
       </section>`;
   }
 
   /* 후원자 1명 자세히 (#donors/{플랫폼:아이디}) */
-  const recordTable = (rows) => `<div class="table-wrap"><table class="sig-table"><thead><tr><th>시간</th><th>받은 멤버</th><th class="num">별풍선</th></tr></thead>
-    <tbody>${rows.map((r) => `<tr><td class="nowrap">${fmtTime(r.at)}</td><td>${r.member_id ? `<a href="${memberHref(r.member_id)}">${esc(r.member)}</a>` : esc(r.member)}</td><td class="num">🎈 ${fmtNum(r.amount)}개</td></tr>`).join("")}</tbody></table></div>`;
+  const recordTable = (rows) => `<div class="table-wrap"><table class="sig-table"><thead><tr><th>시간</th><th>받은 멤버</th><th class="num">${DP === "youtube" ? "금액" : "별풍선"}</th></tr></thead>
+    <tbody>${rows.map((r) => `<tr><td class="nowrap">${fmtTime(r.at)}</td><td>${r.member_id ? `<a href="${memberHref(r.member_id)}">${esc(r.member)}</a>` : esc(r.member)}</td><td class="num">${dn(r.amount)}</td></tr>`).join("")}</tbody></table></div>`;
   let dd = null, ddSeq = 0;
   async function renderDonorPage(key) {
     const seq = ++ddSeq;
     if (!dd || dd.donor.key !== key) $("#rank-view").innerHTML = `<section class="rk-page">${empty("불러오는 중…")}</section>`;
     let d;
-    try { d = await api(`api/donors/${encodeURIComponent(key)}?${rkQuery({ sort: null })}`); }
+    try { d = await api(`api/donors/${encodeURIComponent(key)}?${rkQuery({ sort: null, platform: null })}`); }
     catch { if (seq === ddSeq) $("#rank-view").innerHTML = `<section class="rk-page">${empty("후원 기록을 찾을 수 없어요.")}<p><a class="ghost-btn" href="#donors">← 후원자 랭킹으로</a></p></section>`; return; }
     if (seq !== ddSeq || current.donor !== key) return;
     dd = d;
+    DP = d.donor.platform === "youtube" ? "youtube" : "soop";
     const { donor: o, summary: s, period: per } = d;
     const max = d.to[0]?.amount || 1;
     $("#rank-view").innerHTML = `
@@ -1077,22 +1092,22 @@
             <p class="md-chips">
               ${s.rank ? `<span class="md-chip strong">${esc(per.label)} ${s.rank}위 <small>/ ${s.of}명</small></span>` : `<span class="md-chip">${esc(per.label)} 후원 없음</span>`}
               ${s.change !== null && s.change !== undefined ? changeMark(s.change) : ""}
-              <span class="md-chip">누적 🎈 ${fmtNum(o.all_total)}개</span>
+              <span class="md-chip">누적 ${dn(o.all_total)}</span>
             </p>
           </div>
         </header>
         <div class="md-toolbar"><div class="rk-period">${periodControls(dnData?.months || rkData?.months || homeData.time?.months)}</div><span class="md-range">${esc(per.label)} <b>${rangeText(per)}</b></span></div>
         <div class="md-stats">
-          ${statTile("후원 합계", `🎈 ${fmtNum(s.total)}개`)}
+          ${statTile("후원 합계", dn(s.total))}
           ${statTile("후원 횟수", `${fmtNum(s.count)}번`)}
           ${statTile("후원한 멤버", `${fmtNum(s.members)}명`)}
-          ${statTile("한 번 최대", s.max ? `🎈 ${fmtNum(s.max)}개` : "-")}
+          ${statTile("한 번 최대", s.max ? dn(s.max) : "-")}
           ${statTile("처음 후원", fmtDate(o.first_at), `마지막 ${fmtAgo(o.last_at)}`)}
         </div>
         <div class="md-grid">
           <section class="md-card">
             <h3>날짜별 후원</h3>
-            <p class="md-total"><strong>🎈 ${fmtNum(s.total)}개</strong> <small>${esc(per.label)} 합계</small></p>
+            <p class="md-total"><strong>${dn(s.total)}</strong> <small>${esc(per.label)} 합계</small></p>
             <div class="chart" id="dd-chart"></div>
           </section>
           <aside class="md-side">
@@ -1108,6 +1123,15 @@
     drawChart($("#dd-chart"), d.daily, METRICS.find((x) => x.id === "donation"), null);
   }
 
+  // 후원 플랫폼 바꾸기 (후원자 랭킹 · 멤버 화면 후원자 탭 공용)
+  $("#rank-view").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-dn-plat]");
+    if (!b || DN.dplat === b.dataset.dnPlat) return;
+    DN.dplat = b.dataset.dnPlat;
+    dnData = null;
+    if (current.page === "donors" && !current.donor) renderDonorsPage();
+    else if (current.page === "ranking" && current.member) renderMemberPage(current.member);
+  });
   $("#rank-view").addEventListener("click", (e) => {
     if (current.page !== "donors") return;
     if (onPeriodEvent(e, periodReload)) return;
