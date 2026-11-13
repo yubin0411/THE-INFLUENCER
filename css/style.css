@@ -745,6 +745,7 @@ svg.pf-logo { width: 24px; height: 17px; }
 
 /* 랭킹 화면 */
 .rank-view { display: block; }
+.view[hidden], #page-view[hidden] { display: none; }  /* 다른 메뉴로 가면 랭킹 · 후원자 화면이 남지 않게 */
 .rk-page { display: grid; gap: 16px; }
 .rk-page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
 .rk-page-head h2 { margin: 0; font-size: 26px; letter-spacing: -0.03em; }
