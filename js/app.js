@@ -1604,8 +1604,8 @@
   }
   /* ---------- 시그 ---------- */
   const isNew = (ms, days = NEW_DAYS) => ms && (Date.now() - ms) / 864e5 <= days;
-  // 시그 단가: 별풍선 개수
-  const won = (n) => `${Number(n || 0).toLocaleString()}개`;
+  // 시그 단가: 원
+  const won = (n) => `${Number(n || 0).toLocaleString()}원`;
   const refsOf = (s) => String(s.ref_url || "").split(/\s+/).filter(Boolean);
   const SORTS = {
     sheet: () => 0,
