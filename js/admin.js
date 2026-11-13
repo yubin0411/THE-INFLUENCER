@@ -10,6 +10,7 @@
   async function boot() {
     const { user } = await api("api/site").catch(() => ({}));
     const isAdmin = user?.role === "admin";
+    myId = user?.id;
     $("#login-view").hidden = isAdmin;
     $("#admin-view").hidden = !isAdmin;
     $("#logout-btn").hidden = !user;
@@ -17,6 +18,8 @@
     if (!isAdmin) return;
     await loadCrews(); // 채널 · 방송 기록의 크루 표시에 필요
     await Promise.all([loadUsers(), loadCodes(), loadChannels(), loadRequests(), loadBrand()]);
+    // admin.html#settle 처럼 주소에 탭 이름이 있으면 그 탭을 바로 엶
+    $(`.admin-tabs [data-panel="${location.hash.slice(1)}"]`)?.click();
   }
 
   $("#admin-login").addEventListener("submit", async (e) => {
@@ -61,6 +64,8 @@
       const taken = users.find((u) => u.member_id === m.id && u.member_id !== cur);
       return `<option value="${m.id}" ${m.id === cur ? "selected" : ""} ${taken ? "disabled" : ""}>${esc(m.name)}${taken ? ` (${esc(taken.username)})` : ""}</option>`;
     }).join("");
+    allUsers = users;
+    renderManage(memberOpts);
     const pending = users.filter((u) => u.status === "pending").length;
     $("#pending-count").textContent = pending;
     $("#pending-count").hidden = !pending;
@@ -124,6 +129,83 @@
     if (btn.hasAttribute("data-delete") && !confirmClick(btn)) return;
     const body = btn.dataset.set ? { status: btn.dataset.set } : btn.dataset.role ? { role: btn.dataset.role } : { action: "delete" };
     act(btn, async () => { await api(`api/admin/users/${id}`, body); await loadUsers(); });
+  });
+
+  /* ---------- 회원 관리 (승인된 회원) ---------- */
+  let allUsers = [];
+  let myId = null;
+  let manageOpts = () => "";
+  function renderManage(memberOpts = manageOpts) {
+    manageOpts = memberOpts;
+    const q = $("#manage-search").value.trim().toLowerCase().replace(/-/g, "");
+    const approved = allUsers.filter((u) => u.status === "approved");
+    const list = approved.filter((u) => !q || [u.username, u.nickname, u.real_name, u.alias, u.phone, u.member_name]
+      .some((v) => String(v || "").toLowerCase().replace(/-/g, "").includes(q)));
+    $("#manage-count").textContent = `${approved.length}명`;
+    $("#manage-list").innerHTML = list.length
+      ? list.map((u) => `
+        <tr data-user="${u.id}">
+          <td><strong>${esc(u.username)}</strong></td>
+          <td>${esc(u.nickname)}</td>
+          <td class="user-info">${u.real_name ? `<b>${esc(u.real_name)}</b>${u.alias ? ` <span class="muted">가명 ${esc(u.alias)}</span>` : ""}` : '<span class="muted">-</span>'}<br><span class="muted">${esc(fmtPhone(u.phone)) || "-"}</span></td>
+          <td class="user-info">${u.account ? `${esc(u.bank)}<br><span class="muted">${esc(u.account)}</span>` : '<span class="muted">-</span>'}</td>
+          <td><select class="cell-input member-link" aria-label="연결 멤버">${memberOpts(u.member_id)}</select></td>
+          <td>${u.role === "admin" ? '<span class="tag">관리자</span>' : "회원"}</td>
+          <td>${fmtDate(u.created_at)}</td>
+          <td class="right actions">
+            <button type="button" class="mini-action" data-edit>수정</button>
+            ${u.id === myId ? '<span class="muted">내 계정</span>' : `
+            <button type="button" class="mini-action" data-role="${u.role === "admin" ? "member" : "admin"}">${u.role === "admin" ? "관리자 해제" : "관리자 지정"}</button>
+            <button type="button" class="mini-action" data-set="rejected">승인 취소</button>
+            <button type="button" class="mini-action danger" data-delete>삭제</button>`}
+          </td>
+        </tr>`).join("")
+      : `<tr><td colspan="8"><div class="empty">${q ? "검색 결과가 없습니다." : "승인된 회원이 없습니다."}</div></td></tr>`;
+  }
+  $("#manage-search").addEventListener("input", () => renderManage());
+  $('.admin-tabs [data-panel="manage"]').addEventListener("click", () => loadUsers().catch((err) => alertNote(err.message)));
+
+  $("#manage-list").addEventListener("change", async (e) => {
+    const sel = e.target.closest(".member-link");
+    if (!sel) return;
+    sel.disabled = true;
+    try { await api(`api/admin/users/${sel.closest("[data-user]").dataset.user}`, { member_id: sel.value ? Number(sel.value) : null }); $("#manage-note").textContent = "연결 멤버를 바꿨습니다."; }
+    catch (err) { $("#manage-note").textContent = err.message; }
+    await loadUsers();
+  });
+
+  $("#manage-list").addEventListener("click", (e) => {
+    const btn = e.target.closest("button");
+    if (!btn) return;
+    const id = Number(btn.closest("[data-user]").dataset.user);
+    if (btn.hasAttribute("data-edit")) {
+      const u = allUsers.find((x) => x.id === id);
+      const f = $("#user-form");
+      f.reset();
+      for (const k of ["id", "nickname", "real_name", "alias", "bank", "account"]) f.elements[k].value = u[k] ?? "";
+      f.elements.phone.value = fmtPhone(u.phone || "");
+      $("#user-editor-title").textContent = `회원 정보 수정 · ${u.username}`;
+      $("#user-note").textContent = "";
+      return $("#modal-user").showModal();
+    }
+    if (btn.hasAttribute("data-delete") && !confirmClick(btn)) return;
+    const body = btn.dataset.set ? { status: btn.dataset.set } : btn.dataset.role ? { role: btn.dataset.role } : { action: "delete" };
+    act(btn, async () => { await api(`api/admin/users/${id}`, body); await loadUsers(); });
+  });
+
+  $("#user-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const btn = $('[type="submit"]', f);
+    btn.disabled = true;
+    try {
+      const body = Object.fromEntries(new FormData(f));
+      await api(`api/admin/users/${body.id}`, { ...body, action: "edit" });
+      $("#modal-user").close();
+      $("#manage-note").textContent = body.password ? "저장했습니다. 비밀번호도 바뀌었어요." : "저장했습니다.";
+      await loadUsers();
+    } catch (err) { $("#user-note").textContent = err.message; }
+    finally { btn.disabled = false; }
   });
 
   /* ---------- 승인코드 ---------- */

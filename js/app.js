@@ -155,7 +155,8 @@
     const myItems = [
       `<button type="button" data-open="modal-recommend" data-need-login>시그 요청</button>`,
       u?.member_id ? `<a href="#me/profile">내 프로필 · 공약 · 시그</a>` : "",
-      u?.member_id ? `<a href="#me/settle">정산</a>` : "",
+      u?.member_id ? `<a href="#me/settle">${u?.role === "admin" ? "내 정산" : "정산"}</a>` : "",
+      u?.role === "admin" ? `<a href="admin.html#settle">정산 관리</a>` : "",
       u?.role === "admin" ? `<a href="admin.html">관리자 페이지</a>` : "",
     ].filter(Boolean);
     $("#user-area").innerHTML = u

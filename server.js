@@ -272,11 +272,20 @@ route("POST", "/api/auth/signup", async (req) => {
   return { ok: true, message: "가입 신청이 완료되었습니다. 관리자 승인 후 로그인할 수 있습니다." };
 });
 
+// 로그인: 정상 로그인은 횟수 제한 없음. 비밀번호를 짧은 시간에 아주 많이(30번) 틀릴 때만 막음 (비밀번호 무작위 대입 방지)
+const loginFails = new Map();
 route("POST", "/api/auth/login", async (req, _p, _u, res) => {
-  throttle(req);
+  const ip = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket.remoteAddress;
+  const now = Date.now();
+  const fails = (loginFails.get(ip) || []).filter((t) => now - t < 10 * 60 * 1000);
+  if (fails.length >= 30) fail(429, "비밀번호를 너무 많이 틀렸습니다. 잠시 후 다시 시도하세요.");
   const b = await readJson(req);
   const u = db.prepare("SELECT * FROM users WHERE username = ?").get(str(b.username, 30));
-  if (!u || !auth.verifyPassword(String(b.password || ""), u.pw_hash)) fail(401, "아이디 또는 비밀번호가 올바르지 않습니다.");
+  if (!u || !auth.verifyPassword(String(b.password || ""), u.pw_hash)) {
+    loginFails.set(ip, [...fails, now]);
+    fail(401, "아이디 또는 비밀번호가 올바르지 않습니다.");
+  }
+  loginFails.delete(ip);
   if (u.status === "pending") fail(403, "관리자 승인 대기 중입니다.");
   if (u.status !== "approved") fail(403, "가입이 거절된 계정입니다.");
   auth.createSession(res, req, u.id);
@@ -333,6 +342,27 @@ route("POST", "/api/admin/users/:id", async (req, p) => {
   const me = requireAdmin(req);
   const b = await readJson(req);
   const id = Number(p.id);
+  if (b.action === "edit") {
+    // 회원 관리: 활동명 · 가입 정보 수정 (+ 비밀번호 새로 지정)
+    const u = db.prepare("SELECT id FROM users WHERE id = ?").get(id);
+    if (!u) fail(404, "회원을 찾을 수 없습니다.");
+    const info = {
+      nickname: str(b.nickname, 30), real_name: str(b.real_name, 30), alias: str(b.alias, 30),
+      phone: String(b.phone ?? "").replace(/[^\d]/g, "").slice(0, 11),
+      bank: str(b.bank, 20), account: String(b.account ?? "").replace(/[^\d-]/g, "").slice(0, 30),
+    };
+    if (!info.nickname) fail(400, "이름(활동명)을 입력하세요.");
+    if (info.phone && !/^01\d{8,9}$/.test(info.phone)) fail(400, "전화번호를 정확히 입력하세요. (예: 010-1234-5678)");
+    const pw = String(b.password || "");
+    if (pw && pw.length < 8) fail(400, "새 비밀번호는 8자 이상으로 입력하세요.");
+    db.prepare("UPDATE users SET nickname = ?, real_name = ?, alias = ?, phone = ?, bank = ?, account = ? WHERE id = ?")
+      .run(info.nickname, info.real_name, info.alias, info.phone, info.bank, info.account, id);
+    if (pw) {
+      db.prepare("UPDATE users SET pw_hash = ? WHERE id = ?").run(auth.hashPassword(pw), id);
+      if (id !== me.id) db.prepare("DELETE FROM sessions WHERE user_id = ?").run(id); // 바뀐 비밀번호로 다시 로그인
+    }
+    return { ok: true };
+  }
   if (id === me.id && !("member_id" in b)) fail(400, "본인 계정은 변경할 수 없습니다.");
   if ("member_id" in b) {
     // 회원 ↔ 멤버 연결 (멤버 하나에는 회원 한 명만)

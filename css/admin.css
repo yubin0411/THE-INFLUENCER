@@ -265,3 +265,7 @@ a.lesson-title:hover { text-decoration: underline; }
 @media (max-width: 400px) {
   .logo .admin-badge { display: none; }
 }
+
+/* 회원 관리 */
+.user-editor { width: min(560px, calc(100% - 24px)); }
+#manage-list .actions { white-space: nowrap; }

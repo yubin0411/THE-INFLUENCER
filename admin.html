@@ -44,6 +44,7 @@
     <div id="admin-view" hidden>
       <nav class="admin-tabs" role="tablist" aria-label="관리 메뉴">
         <button type="button" role="tab" class="is-active" data-panel="users">회원 승인 <span class="count" id="pending-count" hidden></span></button>
+        <button type="button" role="tab" data-panel="manage">회원 관리</button>
         <button type="button" role="tab" data-panel="codes">승인코드</button>
         <button type="button" role="tab" data-panel="channels">멤버 · 채널</button>
         <button type="button" role="tab" data-panel="broadcasts">방송 기록</button>
@@ -59,7 +60,7 @@
       <!-- 회원 -->
       <section class="panel" data-view="users">
         <div class="panel-head">
-          <h2>회원 승인 · 관리</h2>
+          <h2>회원 승인</h2>
           <div class="chips" id="user-filter">
             <button type="button" class="chip is-active" data-status="pending">승인 대기</button>
             <button type="button" class="chip" data-status="approved">승인됨</button>
@@ -71,6 +72,22 @@
           <table class="sig-table admin-table">
             <thead><tr><th>아이디</th><th>이름 (활동명)</th><th>가입 정보</th><th>연결 멤버</th><th>사용한 코드</th><th>가입일</th><th>상태</th><th class="right">관리</th></tr></thead>
             <tbody id="user-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- 회원 관리 (승인된 회원) -->
+      <section class="panel" data-view="manage" hidden>
+        <div class="panel-head">
+          <h2>회원 관리 <span class="muted" id="manage-count"></span></h2>
+          <label class="search"><span class="sr-only">회원 검색</span><input type="search" id="manage-search" placeholder="아이디 · 활동명 · 본명 · 전화번호 · 멤버 검색"></label>
+        </div>
+        <p class="hint">승인된 회원 목록입니다. [수정]에서 활동명 · 본명 · 연락처 · 계좌를 고치거나 비밀번호를 새로 정해 줄 수 있습니다. 연결 멤버를 고르면 그 회원이 사이트에서 자기 멤버 프로필 · 정산을 봅니다.</p>
+        <p class="form-note" id="manage-note" aria-live="polite"></p>
+        <div class="table-wrap">
+          <table class="sig-table admin-table">
+            <thead><tr><th>아이디</th><th>활동명</th><th>본명 · 연락처</th><th>계좌</th><th>연결 멤버</th><th>권한</th><th>가입일</th><th class="right">관리</th></tr></thead>
+            <tbody id="manage-list"></tbody>
           </table>
         </div>
       </section>
@@ -384,6 +401,29 @@
 
       <div class="ed-actions">
         <p class="form-note" id="member-note" aria-live="polite"></p>
+        <button type="button" class="ghost-btn" data-close>닫기</button>
+        <button type="submit" class="primary-btn">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 회원 정보 수정 -->
+  <dialog class="modal user-editor" id="modal-user" aria-labelledby="user-editor-title">
+    <form class="modal-body" id="user-form">
+      <button class="modal-close" type="button" data-close aria-label="닫기">×</button>
+      <h2 id="user-editor-title">회원 정보 수정</h2>
+      <input type="hidden" name="id">
+      <div class="ed-grid">
+        <label class="field">이름 (활동명) *<input name="nickname" required maxlength="30"></label>
+        <label class="field">본명<input name="real_name" maxlength="30"></label>
+        <label class="field">가명<input name="alias" maxlength="30"></label>
+        <label class="field">전화번호<input name="phone" inputmode="tel" maxlength="13" placeholder="010-1234-5678"></label>
+        <label class="field">은행<input name="bank" maxlength="20"></label>
+        <label class="field">계좌번호<input name="account" inputmode="numeric" maxlength="30"></label>
+      </div>
+      <label class="field">새 비밀번호 (바꿀 때만, 8자 이상)<input name="password" type="password" minlength="8" autocomplete="new-password" placeholder="비우면 그대로"></label>
+      <div class="ed-actions">
+        <p class="form-note" id="user-note" aria-live="polite"></p>
         <button type="button" class="ghost-btn" data-close>닫기</button>
         <button type="submit" class="primary-btn">저장</button>
       </div>
