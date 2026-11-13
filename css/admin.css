@@ -256,3 +256,12 @@ a.lesson-title:hover { text-decoration: underline; }
 .st-terms th { white-space: normal; font-size: 12px; line-height: 1.35; min-width: 64px; }
 .st-terms select.cell-input { min-width: 150px; }
 .st-terms .cell-input.small { width: 64px; }
+
+/* 휴대폰: 관리자 헤더가 한 줄에 들어가게 */
+.logo .admin-badge { flex: none; margin-left: 0; }
+@media (max-width: 480px) {
+  .header-actions .text-btn, .header-actions .ghost-btn { padding: 6px 8px; font-size: 13px; white-space: nowrap; }
+}
+@media (max-width: 400px) {
+  .logo .admin-badge { display: none; }
+}

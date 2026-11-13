@@ -1772,13 +1772,13 @@
     bg.innerHTML = b.banner ? `<img src="${esc(b.banner)}" alt="">` : "";
     document.body.classList.toggle("has-bg", !!b.banner);
     // 홈 맨 위에도 같은 배너를 가로 꽉 차게 (링크가 있으면 누르면 이동)
-    const hero = b.banner ? `<img src="${esc(b.banner)}" alt="ONE PICK 배너" fetchpriority="high">` : "";
+    const hero = b.banner ? `<img src="${esc(b.banner)}" alt="THE INFLUENCER 배너" fetchpriority="high">` : "";
     $("#hero-img").innerHTML = hero && b.banner_link ? `<a href="${esc(b.banner_link)}" target="_blank" rel="noopener">${hero}</a>` : hero;
     $("#home-hero").classList.toggle("no-img", !b.banner);
 
     const sns = [["youtube", "YouTube", b.youtube_url], ["soop", "SOOP", b.soop_url]];
     $("#footer-sns").innerHTML = sns.map(([pf, name, url]) => url
-      ? `<a class="sns-link" href="${esc(url)}" target="_blank" rel="noopener" aria-label="ONE PICK ${name}">${logo(pf)}<span>${name}</span></a>`
+      ? `<a class="sns-link" href="${esc(url)}" target="_blank" rel="noopener" aria-label="THE INFLUENCER ${name}">${logo(pf)}<span>${name}</span></a>`
       : `<span class="sns-link">${logo(pf)}<span>${name}</span></span>`).join("");
   }
 

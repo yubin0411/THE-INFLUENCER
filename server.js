@@ -1,5 +1,5 @@
 /*
- * ONE PICK 서버
+ * THE INFLUENCER 서버
  *   실행: node server.js   (기본 http://localhost:8000)
  *   설정: .env  →  YOUTUBE_API_KEY, ADMIN_ID, ADMIN_PASSWORD, (선택) PORT
  */

@@ -1,7 +1,7 @@
 {
   "name": "eternal-site",
   "private": true,
-  "description": "ONE PICK 사이트 + 관리자 페이지",
+  "description": "THE INFLUENCER 사이트 + 관리자 페이지",
   "scripts": {
     "start": "node server.js"
   },

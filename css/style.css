@@ -1144,3 +1144,17 @@ body.is-home .main { padding-top: 32px; }
   .settle-table th:nth-child(4), .settle-table td:nth-child(4) { display: none; }
 }
 .settle-table .num, .settle-steps dd { white-space: nowrap; }
+
+/* ---------- 헤더: 휴대폰에서 로고 줄바꿈 방지 ---------- */
+.logo { min-width: 0; flex-shrink: 1; }
+.logo-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.header-actions { flex-shrink: 0; }
+@media (max-width: 480px) {
+  .header-inner { gap: 10px; padding: 0 14px; height: 58px; }
+  .logo { gap: 8px; }
+  .logo-mark { width: 28px; height: 28px; }
+  .logo-text { font-size: clamp(13px, 4.2vw, 16px); letter-spacing: -0.03em; }
+  .header-actions { gap: 4px; }
+  #theme-toggle { padding: 6px 9px; font-size: 12px; }
+  .menu-btn { padding: 8px; }
+}
