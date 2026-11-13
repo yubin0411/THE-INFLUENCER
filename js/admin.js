@@ -377,6 +377,8 @@
 
   async function loadSigs() {
     if (!sigCrew()) { sigs = []; return renderSigs(); }
+    // 아직 자동 저장 전인 칸이 있으면 먼저 저장 (목록을 다시 그리면서 고친 내용이 사라지지 않게)
+    await Promise.all($$("#sig-admin-list [data-sig]").filter((c) => saveTimers.has(Number(c.dataset.sig))).map(saveSig));
     sigs = await api(`api/admin/sigs?crew=${encodeURIComponent(sigCrew())}`);
     renderSigs();
   }
@@ -415,27 +417,29 @@
             <label class="check"><input type="checkbox" name="hidden" ${s.hidden ? "checked" : ""}> 숨김</label>
             <div class="actions">
               <button type="button" class="mini-action ${wait ? "warn" : ""}" data-lessons aria-expanded="${open}">레슨 ${ready}${wait ? ` · 대기 ${wait}` : ""}${s.image ? " · 이미지" : ""}${s.audio ? " · 음원" : ""}</button>
-              <button type="button" class="mini-action ok" data-save>저장</button>
+              <span class="save-state" aria-live="polite"></span>
               <button type="button" class="mini-action danger" data-delete>삭제</button>
             </div>
           </div>
           <div class="lesson-box" ${open ? "" : "hidden"}>
             <div class="asset-row">
-              <div class="asset">
+              <div class="asset drop-zone" data-drop="image">
                 <strong>시그 이미지</strong>
                 ${s.image ? `<a href="/media/sigs/${esc(s.image)}" target="_blank" rel="noopener"><img class="asset-img" src="/media/sigs/${esc(s.image)}" alt=""></a>` : '<span class="asset-img empty-img">없음</span>'}
                 <span class="asset-tools">
                   <label class="mini-action file-btn">${s.image ? "바꾸기" : "이미지 올리기"}<input type="file" accept="image/png,image/jpeg,image/gif,image/webp" data-asset="image" hidden></label>
                   ${s.image ? '<button type="button" class="mini-action danger" data-asset-del="image">삭제</button>' : ""}
                 </span>
+                <span class="drop-hint">이미지 파일을 여기로 끌어다 놓아도 돼요</span>
               </div>
-              <div class="asset">
+              <div class="asset drop-zone" data-drop="audio">
                 <strong>음원</strong>
                 ${s.audio ? `<audio controls preload="none" src="/media/sigs/${esc(s.audio)}"></audio><span class="muted">${esc(s.audio_name)} · ${fmtSize(s.audio_size)}</span>` : '<span class="muted">없음</span>'}
                 <span class="asset-tools">
                   <label class="mini-action file-btn">${s.audio ? "바꾸기" : "음원 올리기"}<input type="file" accept="audio/*,.mp3,.m4a,.wav,.ogg,.aac,.flac" data-asset="audio" hidden></label>
                   ${s.audio ? '<button type="button" class="mini-action danger" data-asset-del="audio">삭제</button>' : ""}
                 </span>
+                <span class="drop-hint">음원 파일을 여기로 끌어다 놓아도 돼요</span>
               </div>
             </div>
             ${s.items.length ? `<ul class="lesson-list">${s.items.map(lessonHtml).join("")}</ul>` : '<p class="hint">등록된 레슨 영상이 없습니다.</p>'}
@@ -492,14 +496,6 @@
       if (!confirmClick(btn)) return;
       return act(btn, async () => { await api(`api/admin/sigs/${id}/asset/delete`, { kind: btn.dataset.assetDel }); note.textContent = "삭제했습니다."; await loadSigs(); });
     }
-    if (btn.hasAttribute("data-save")) {
-      const v = (n) => $(`[name="${n}"]`, card);
-      return act(btn, async () => {
-        await api("api/admin/sigs", { id, category: v("category").value, name: v("name").value, price: v("price").value, ref_url: v("ref_url").value, hidden: v("hidden").checked });
-        note.textContent = "저장했습니다.";
-        await loadSigs();
-      });
-    }
     if (btn.hasAttribute("data-add-link")) {
       const input = $('[name="lesson_url"]', card);
       return act(btn, async () => {
@@ -515,16 +511,21 @@
   });
 
   // 영상 파일 고르면 바로 업로드 (파일 대기 칸 채우기 / 새로 추가)
-  $("#sig-admin-list").addEventListener("change", async (e) => {
+  $("#sig-admin-list").addEventListener("change", (e) => {
     const input = e.target.closest("input[type=file]");
     if (!input?.files[0]) return;
-    const card = input.closest("[data-sig]");
-    const file = input.files[0];
+    uploadSigFile(input.closest("[data-sig]"), input.files[0], input.dataset.asset || "lesson", input.dataset.fill);
+  });
+
+  async function uploadSigFile(card, file, kind, fill) {
     const note = $("#sig-note");
-    const q = input.dataset.fill ? `?lesson=${input.dataset.fill}` : "";
-    const target = input.dataset.asset
-      ? `api/admin/sigs/${card.dataset.sig}/asset?kind=${input.dataset.asset}`
+    const q = fill ? `?lesson=${fill}` : "";
+    const target = kind === "image" || kind === "audio"
+      ? `api/admin/sigs/${card.dataset.sig}/asset?kind=${kind}`
       : `api/admin/sigs/${card.dataset.sig}/lessons/upload${q}`;
+    // 진행 막대가 보이도록 펼쳐 둠
+    openSigs.add(Number(card.dataset.sig));
+    $(".lesson-box", card).hidden = false;
     $$("input[type=file]", card).forEach((i) => (i.disabled = true));
     note.textContent = `${file.name} 올리는 중… (${fmtSize(file.size)})`;
     try {
@@ -535,6 +536,86 @@
       note.textContent = err.message;
       $$("input[type=file]", card).forEach((i) => (i.disabled = false));
     }
+  }
+
+  // 끌어다 놓기: 이미지 · 음원 칸에 놓으면 그 칸으로, 시그 줄 아무 데나 놓으면 파일 종류를 보고 알아서
+  const fileKind = (f) => f.type.startsWith("image/") ? "image"
+    : f.type.startsWith("audio/") || /\.(mp3|m4a|wav|ogg|aac|flac)$/i.test(f.name) ? "audio"
+    : f.type.startsWith("video/") || /\.(mp4|mov|webm|mkv|avi)$/i.test(f.name) ? "lesson" : null;
+  const KIND_NAME = { image: "이미지", audio: "음원", lesson: "영상" };
+  const clearDrag = () => $$("#sig-admin-list .is-drag").forEach((x) => x.classList.remove("is-drag"));
+  $("#sig-admin-list").addEventListener("dragover", (e) => {
+    if (!e.dataTransfer.types.includes("Files")) return;
+    const card = e.target.closest("[data-sig]");
+    if (!card) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+    const zone = e.target.closest("[data-drop]") || card;
+    if (!zone.classList.contains("is-drag")) { clearDrag(); zone.classList.add("is-drag"); }
+  });
+  $("#sig-admin-list").addEventListener("dragleave", (e) => { if (!e.relatedTarget || !$("#sig-admin-list").contains(e.relatedTarget)) clearDrag(); });
+  $("#sig-admin-list").addEventListener("drop", (e) => {
+    const card = e.target.closest("[data-sig]");
+    if (!card || !e.dataTransfer.files.length) return;
+    e.preventDefault();
+    clearDrag();
+    const file = e.dataTransfer.files[0];
+    const zone = e.target.closest("[data-drop]");
+    const kind = fileKind(file);
+    const want = zone?.dataset.drop || kind;
+    if (!kind || (zone && kind !== want)) {
+      $("#sig-note").textContent = zone ? `${KIND_NAME[want]} 칸에는 ${KIND_NAME[want]} 파일만 넣을 수 있어요. (${file.name})` : `이미지 · 음원 · 영상 파일만 넣을 수 있어요. (${file.name})`;
+      return;
+    }
+    uploadSigFile(card, file, want);
+  });
+  // 칸 밖에 잘못 놓아도 브라우저가 파일을 열어 버리지 않게
+  window.addEventListener("dragover", (e) => { if (e.dataTransfer?.types.includes("Files")) e.preventDefault(); });
+  window.addEventListener("drop", (e) => { if (!e.target.closest?.("#sig-admin-list [data-sig]")) e.preventDefault(); });
+
+  // 자동 저장: 분류 · 이름 · 단가 · 레퍼런스 · 숨김을 고치면 잠깐 뒤 저장 (저장 버튼 없음)
+  const saveTimers = new Map();
+  async function saveSig(card) {
+    const id = Number(card.dataset.sig);
+    clearTimeout(saveTimers.get(id));
+    saveTimers.delete(id);
+    const v = (n) => $(`[name="${n}"]`, card);
+    const state = $(".save-state", card);
+    const body = { id, category: v("category").value, name: v("name").value, price: v("price").value, ref_url: v("ref_url").value, hidden: v("hidden").checked };
+    const key = JSON.stringify(body);
+    if (card.dataset.saved === key) return;
+    state.textContent = "저장 중…";
+    state.className = "save-state";
+    try {
+      await api("api/admin/sigs", body);
+      card.dataset.saved = key;
+      state.textContent = "✓ 저장됨";
+      state.classList.add("ok");
+      const sg = sigs.find((x) => x.id === id);
+      if (sg) Object.assign(sg, { category: body.category, name: body.name, ref_url: body.ref_url, hidden: body.hidden, price: Number(String(body.price).replace(/[^\d]/g, "")) || 0 });
+      card.classList.toggle("is-hidden", body.hidden);
+    } catch (err) {
+      state.textContent = `저장 안 됨: ${err.message}`;
+      state.classList.add("err");
+    }
+  }
+  const SIG_FIELDS = "input[name=category], input[name=name], input[name=price], input[name=ref_url]";
+  $("#sig-admin-list").addEventListener("input", (e) => {
+    const f = e.target.closest(SIG_FIELDS);
+    if (!f) return;
+    const card = f.closest("[data-sig]");
+    const id = Number(card.dataset.sig);
+    clearTimeout(saveTimers.get(id));
+    $(".save-state", card).textContent = "고치는 중…";
+    $(".save-state", card).className = "save-state";
+    saveTimers.set(id, setTimeout(() => saveSig(card), 1000));
+  });
+  $("#sig-admin-list").addEventListener("change", (e) => {
+    const f = e.target.closest(`${SIG_FIELDS}, input[name=hidden]`);
+    if (f) saveSig(f.closest("[data-sig]"));
+  });
+  $("#sig-admin-list").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && e.target.closest(SIG_FIELDS)) { e.preventDefault(); saveSig(e.target.closest("[data-sig]")); }
   });
 
   /* 엑셀 */
